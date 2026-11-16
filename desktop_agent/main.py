@@ -1,12 +1,18 @@
 """NetSync AI desktop agent — CLI entrypoint.
 
-Phase 1: init local DB, register/index folders, local search.
-Phase 2 adds: `run` — pairing + persistent WSS connection to coordinator.
+Commands:
+  init    create local database + settings
+  pair    redeem a pairing code -> device credential (one-time)
+  run     connect to the coordinator and stay resident (the daemon)
+  index   index a folder into local SQLite FTS5
+  search  search the local index
+  status  show agent state
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -14,6 +20,7 @@ from pathlib import Path
 
 from database.db import connect, default_data_dir, get_setting, set_setting
 from indexing.indexer import index_folder, register_folder, search_files
+from networking.coordinator import PairingFailed, redeem_pairing, run_forever
 
 log = logging.getLogger("netsync-agent")
 AGENT_VERSION = "0.1.0"
@@ -56,9 +63,49 @@ def cmd_status(args: argparse.Namespace) -> int:
         "agent_version": AGENT_VERSION,
         "device_id": device_id,
         "paired": device_id is not None,
+        "coordinator_url": get_setting(conn, "coordinator_url"),
         "indexed_folders": [dict(f) for f in folders],
         "data_dir": str(args.data_dir),
     }, indent=2))
+    return 0
+
+
+def cmd_pair(args: argparse.Namespace) -> int:
+    conn = connect(args.data_dir)
+    if get_setting(conn, "device_id") and not args.force:
+        print("already paired (use --force to re-pair)", file=sys.stderr)
+        return 2
+    try:
+        result = asyncio.run(
+            redeem_pairing(args.coordinator, args.code, AGENT_VERSION)
+        )
+    except PairingFailed as exc:
+        print(f"pairing failed: {exc}", file=sys.stderr)
+        return 1
+    set_setting(conn, "device_id", result["device_id"])
+    set_setting(conn, "device_credential", result["device_credential"])
+    set_setting(conn, "device_name", result["device_name"])
+    set_setting(conn, "coordinator_url", args.coordinator)
+    print(f"paired as {result['device_name']} ({result['device_id']})")
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    conn = connect(args.data_dir)
+    device_id = get_setting(conn, "device_id")
+    credential = get_setting(conn, "device_credential")
+    coordinator = get_setting(conn, "coordinator_url") or args.coordinator
+    if not device_id or not credential:
+        print("not paired — run `main.py pair <code>` first", file=sys.stderr)
+        return 2
+    if not coordinator:
+        print("no coordinator URL — pass --coordinator", file=sys.stderr)
+        return 2
+    log.info("starting agent: device=%s coordinator=%s", device_id, coordinator)
+    try:
+        asyncio.run(run_forever(coordinator, device_id, credential, AGENT_VERSION))
+    except KeyboardInterrupt:
+        log.info("shutting down")
     return 0
 
 
@@ -68,6 +115,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init").set_defaults(fn=cmd_init)
+
+    pp = sub.add_parser("pair")
+    pp.add_argument("code", help="8-character code from the web dashboard")
+    pp.add_argument("--coordinator", default="http://localhost:8000")
+    pp.add_argument("--force", action="store_true")
+    pp.set_defaults(fn=cmd_pair)
+
+    pr = sub.add_parser("run")
+    pr.add_argument("--coordinator", default=None)
+    pr.set_defaults(fn=cmd_run)
 
     pi = sub.add_parser("index")
     pi.add_argument("folder")

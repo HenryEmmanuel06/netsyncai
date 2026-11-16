@@ -41,7 +41,9 @@ cd desktop_agent
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt -r requirements-dev.txt
 pytest
-python -m main init --data-dir %LOCALAPPDATA%\NetSyncAI
+python main.py init
+python main.py pair ABCDEFGH --coordinator http://localhost:8000   # code from Devices page
+python main.py run          # daemon: persistent WSS + heartbeats + reconnect
 ```
 
 ### Frontend
@@ -65,10 +67,12 @@ Apply migrations in order under `supabase/migrations/` (e.g. via
 
 ## Limitations (Phase 1)
 
-Implemented and tested: monorepo, DB schema + RLS, backend health/auth/JWT/
-device-registry endpoints, agent SQLite schema + FTS5 search + path-security
-+ folder indexer, Next.js auth shell.
+Implemented and tested: monorepo, DB schema + RLS, backend health/auth/JWT,
+device registry, **pairing codes + agent WebSocket + live presence**
+(Phase 2, verified end-to-end), agent SQLite schema + FTS5 search +
+path-security + folder indexer, Next.js auth shell, Devices page with
+pairing UI + live status polling.
 
-Not yet implemented (scaffolded/designed only): device pairing codes, agent
-WebSocket connection, presence, remote browsing, transfers, sync engine, AI
-task planning, document conversion, tray UI, installer build, deployments.
+Not yet implemented (scaffolded/designed only): remote browsing, transfers,
+sync engine, AI task planning, document conversion, tray UI, installer
+build, deployments.

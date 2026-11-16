@@ -147,7 +147,7 @@ permissions rows are visible to owners and explicitly-granted subjects only.
 | Phase | Deliverable | Acceptance |
 |---|---|---|
 | **1 Foundation** *(this PR)* | Monorepo, migrations, FastAPI health+auth+device registry, agent SQLite/FTS5+path security, Next.js auth shell | `pytest` green on backend & agent; `next build` green; migrations parse |
-| 2 Connectivity | Pairing flow, agent WSS, presence | Two agents on one machine pair and show Online in dashboard |
+| 2 Connectivity **[implemented]** | Pairing flow, agent WSS, presence | ✓ verified live: code → pair → online → disconnect → offline |
 | 3 File mgmt | Indexing, browse/search, LAN transfer | Unauthorized rename/path-traversal tests fail closed; chunked transfer with resume passes |
 | 4 Sync | Watchdog, bidirectional sync, conflicts | Two agents sync a folder; simultaneous edit produces conflict copies, no data loss |
 | 5 AI | Gemini tool-calling → task engine | Golden prompt suite ≥ threshold accuracy; destructive ops require approval |
