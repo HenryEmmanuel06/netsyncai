@@ -39,7 +39,7 @@ def cmd_index(args: argparse.Namespace) -> int:
     if not folder_path.is_dir():
         print(f"not a directory: {folder_path}", file=sys.stderr)
         return 2
-    folder_id = register_folder(conn, folder_path, label=args.label)
+    folder_id = register_folder(conn, folder_path, label=args.label, access=args.access)
     stats = index_folder(conn, folder_id)
     print(
         f"indexed {folder_path}: +{stats.added} ~{stats.updated} "
@@ -103,7 +103,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     log.info("starting agent: device=%s coordinator=%s", device_id, coordinator)
     try:
-        asyncio.run(run_forever(coordinator, device_id, credential, AGENT_VERSION))
+        asyncio.run(
+            run_forever(coordinator, device_id, credential, AGENT_VERSION, conn=conn)
+        )
     except KeyboardInterrupt:
         log.info("shutting down")
     return 0
@@ -129,6 +131,10 @@ def build_parser() -> argparse.ArgumentParser:
     pi = sub.add_parser("index")
     pi.add_argument("folder")
     pi.add_argument("--label", default="")
+    pi.add_argument(
+        "--access", default="read", choices=["none", "read", "readwrite"],
+        help="remote access level for this folder",
+    )
     pi.set_defaults(fn=cmd_index)
 
     ps = sub.add_parser("search")

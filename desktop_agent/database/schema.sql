@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS indexed_folders (
   id         INTEGER PRIMARY KEY,
   path       TEXT NOT NULL UNIQUE,      -- absolute, normalized
   label      TEXT NOT NULL DEFAULT '',
+  access     TEXT NOT NULL DEFAULT 'read',  -- none|read|readwrite (remote ops)
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

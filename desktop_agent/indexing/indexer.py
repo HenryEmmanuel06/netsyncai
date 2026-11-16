@@ -41,12 +41,19 @@ class IndexStats:
     skipped: int = 0
 
 
-def register_folder(conn: sqlite3.Connection, path: str | Path, label: str = "") -> int:
+def register_folder(
+    conn: sqlite3.Connection,
+    path: str | Path,
+    label: str = "",
+    access: str = "read",
+) -> int:
+    if access not in ("none", "read", "readwrite"):
+        raise ValueError(f"bad access level: {access}")
     p = str(Path(path).resolve())
     conn.execute(
-        "INSERT INTO indexed_folders (path, label) VALUES (?, ?) "
-        "ON CONFLICT(path) DO UPDATE SET label = excluded.label",
-        (p, label),
+        "INSERT INTO indexed_folders (path, label, access) VALUES (?, ?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET label = excluded.label, access = excluded.access",
+        (p, label, access),
     )
     conn.commit()
     return conn.execute(

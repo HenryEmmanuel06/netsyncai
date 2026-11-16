@@ -131,7 +131,7 @@ async def test_command_dispatch_returns_not_implemented():
             run_session(base, "dev-1", "cred", "0.1.0"), timeout=5
         )
         assert result["ok"] is False
-        assert "not yet implemented" in result["error"]
+        assert "not available" in result["error"]
     finally:
         server.close()
         await server.wait_closed()

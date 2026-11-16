@@ -14,7 +14,7 @@ import random
 import httpx
 import websockets
 
-from protocol import AgentHello, DeviceStatus, Envelope, MessageType
+from protocol import AgentHello, CommandDispatch, DeviceStatus, Envelope, MessageType
 
 log = logging.getLogger("netsync.coordinator")
 
@@ -62,22 +62,59 @@ async def _heartbeat(ws, device_id: str) -> None:
         await ws.send(Envelope(type=MessageType.PING).model_dump_json())
 
 
-async def _handle_message(raw: str, ws, send) -> None:
+async def _run_command(ctx, env: Envelope, send) -> None:
+    """Execute a dispatched tool command and report the result."""
+    from file_operations.ops import HANDLERS, OpDenied
+
+    cmd = CommandDispatch.model_validate(env.payload)
+    handler = HANDLERS.get(cmd.tool)
+    try:
+        if handler is None:
+            raise OpDenied(f"unknown tool: {cmd.tool}")
+        result = await handler(ctx, cmd.args)
+        payload = {"task_id": cmd.task_id, "step_id": cmd.step_id,
+                   "ok": True, "result": result}
+    except OpDenied as exc:
+        payload = {"task_id": cmd.task_id, "step_id": cmd.step_id,
+                   "ok": False, "error": str(exc)}
+    except Exception as exc:  # never let an op crash the session
+        log.exception("command %s failed", cmd.tool)
+        payload = {"task_id": cmd.task_id, "step_id": cmd.step_id,
+                   "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    await send(Envelope(type=MessageType.COMMAND_RESULT, payload=payload).model_dump_json())
+
+
+TRANSFER_TYPES = {
+    MessageType.TRANSFER_BEGIN, MessageType.TRANSFER_CHUNK,
+    MessageType.TRANSFER_END, MessageType.TRANSFER_ABORT,
+}
+
+
+async def _handle_message(raw: str, send, ctx=None, tasks=None) -> None:
     env = Envelope.model_validate_json(raw)
     if env.type is MessageType.PING:
         await send(Envelope(type=MessageType.PONG).model_dump_json())
     elif env.type is MessageType.COMMAND_DISPATCH:
-        # Phase 3: route to the operations engine. For now, fail loudly
-        # rather than silently dropping work.
-        await send(Envelope(
-            type=MessageType.COMMAND_RESULT,
-            payload={
-                "task_id": env.payload.get("task_id", ""),
-                "step_id": env.payload.get("step_id", ""),
-                "ok": False,
-                "error": "command execution not yet implemented (Phase 3)",
-            },
-        ).model_dump_json())
+        if ctx is not None:
+            # run concurrently — a send_file handler blocks on chunks
+            t = asyncio.create_task(_run_command(ctx, env, send))
+            if tasks is not None:
+                tasks.add(t)
+                t.add_done_callback(tasks.discard)
+        else:
+            await send(Envelope(
+                type=MessageType.COMMAND_RESULT,
+                payload={
+                    "task_id": env.payload.get("task_id", ""),
+                    "step_id": env.payload.get("step_id", ""),
+                    "ok": False,
+                    "error": "command execution not available",
+                },
+            ).model_dump_json())
+    elif env.type in TRANSFER_TYPES:
+        if ctx is not None:
+            state = ctx.transfer_state(env.payload["transfer_id"])
+            await state.queue.put(env)
     elif env.type is MessageType.ERROR:
         log.warning("coordinator error: %s", env.payload)
 
@@ -88,6 +125,7 @@ async def run_session(
     credential: str,
     agent_version: str,
     status: DeviceStatus = DeviceStatus.ONLINE,
+    conn=None,
 ) -> None:
     """One connection attempt: hello → message loop. Raises on failure;
     the caller (run_forever) owns retry/backoff policy."""
@@ -112,15 +150,23 @@ async def run_session(
             raise RuntimeError(f"unexpected handshake reply: {ack.type}")
         log.info("connected to %s", url)
 
+        ctx = None
+        if conn is not None:
+            from file_operations.ops import AgentContext
+            ctx = AgentContext(conn, ws.send)
+
         hb = asyncio.create_task(_heartbeat(ws, device_id))
+        tasks: set = set()
         try:
             async for raw in ws:
                 try:
-                    await _handle_message(raw, ws, ws.send)
+                    await _handle_message(raw, ws.send, ctx, tasks)
                 except Exception:
                     log.exception("failed to handle message")
         finally:
             hb.cancel()
+            for t in tasks:
+                t.cancel()
 
 
 async def run_forever(
@@ -128,13 +174,15 @@ async def run_forever(
     device_id: str,
     credential: str,
     agent_version: str,
+    conn=None,
 ) -> None:
     """Reconnecting outer loop — the agent's main resident coroutine."""
     delays = backoff_delays()
     while True:
         try:
             await run_session(
-                coordinator_url, device_id, credential, agent_version
+                coordinator_url, device_id, credential, agent_version,
+                conn=conn,
             )
         except asyncio.CancelledError:
             raise

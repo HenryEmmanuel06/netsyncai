@@ -68,11 +68,14 @@ Apply migrations in order under `supabase/migrations/` (e.g. via
 ## Limitations (Phase 1)
 
 Implemented and tested: monorepo, DB schema + RLS, backend health/auth/JWT,
-device registry, **pairing codes + agent WebSocket + live presence**
-(Phase 2, verified end-to-end), agent SQLite schema + FTS5 search +
-path-security + folder indexer, Next.js auth shell, Devices page with
-pairing UI + live status polling.
+device registry, pairing codes + agent WebSocket + live presence (Phase 2),
+**remote file management** (Phase 3): browse/search/rename/move/copy/mkdir/
+delete dispatched over WSS with agent-side path security + per-folder
+access levels, chunked base64 transfers with SHA-256 verification + atomic
+writes + collision renaming, Network Files UI.
 
-Not yet implemented (scaffolded/designed only): remote browsing, transfers,
-sync engine, AI task planning, document conversion, tray UI, installer
-build, deployments.
+Transfer transport is currently the coordinator relay (works through any
+NAT); direct LAN P2P is designed but deferred.
+
+Not yet implemented: multi-user permission grants UI, sync engine, AI task
+planning, document conversion, tray UI, installer build, deployments.

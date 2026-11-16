@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.api.deps import get_device_store
 from app.networking.connections import manager
+from app.networking import transfers
+from app.orchestration import dispatcher
 from app.schemas.devices import DeviceResponse
 from app.services.device_registry import DeviceNotFound, DeviceStore
 from app.protocol import (
@@ -91,7 +93,16 @@ async def agent_socket(
                 upd = PresenceUpdate.model_validate(env.payload)
                 await store.set_status(device.owner_id, device.id, upd.status.value)
             elif env.type is MessageType.COMMAND_RESULT:
-                pass  # Phase 3: route results to the task engine
+                dispatcher.resolve(
+                    env.payload.get("step_id", ""), env.payload
+                )
+            elif env.type in (
+                MessageType.TRANSFER_BEGIN,
+                MessageType.TRANSFER_CHUNK,
+                MessageType.TRANSFER_END,
+                MessageType.TRANSFER_ABORT,
+            ):
+                await transfers.route(env)
             else:
                 await ws.send_text(_env(
                     MessageType.ERROR,

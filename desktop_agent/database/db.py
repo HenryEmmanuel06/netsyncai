@@ -27,7 +27,18 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _apply_schema(conn)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent column additions for DBs created by earlier versions."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(indexed_folders)")}
+    if "access" not in cols:
+        conn.execute(
+            "ALTER TABLE indexed_folders ADD COLUMN access TEXT NOT NULL DEFAULT 'read'"
+        )
+        conn.commit()
 
 
 def _apply_schema(conn: sqlite3.Connection) -> None:

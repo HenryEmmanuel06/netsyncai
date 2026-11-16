@@ -26,6 +26,11 @@ class MessageType(str, Enum):
     COMMAND_RESULT = "command.result"
     # cloud -> agent
     COMMAND_DISPATCH = "command.dispatch"
+    # file transfer (either direction)
+    TRANSFER_BEGIN = "transfer.begin"
+    TRANSFER_CHUNK = "transfer.chunk"
+    TRANSFER_END = "transfer.end"
+    TRANSFER_ABORT = "transfer.abort"
     # bidirectional
     ERROR = "error"
     PING = "ping"
@@ -83,6 +88,50 @@ class ErrorPayload(BaseModel):
     code: str
     message: str
     retryable: bool = False
+
+
+# ── file transfer ────────────────────────────────────────────────────────────
+# Chunks flow over the established WSS (relay transport). A later phase adds
+# direct LAN P2P behind the same TRANSFER_* contract — payload is identical.
+
+class TransferBegin(BaseModel):
+    transfer_id: str
+    direction: Literal["push", "pull"]   # push = sender→receiver, pull = agent→cloud relay
+    name: str
+    size: int
+    sha256: str
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class TransferChunk(BaseModel):
+    transfer_id: str
+    seq: int
+    data: str   # base64
+
+
+class TransferEnd(BaseModel):
+    transfer_id: str
+    seq: int          # total chunks sent
+    sha256: str
+
+
+class TransferAbort(BaseModel):
+    transfer_id: str
+    reason: str
+
+
+# permission bits — mirrors supabase migration comment
+PERM_BROWSE = 1
+PERM_DOWNLOAD = 2
+PERM_UPLOAD = 4
+PERM_RENAME = 8
+PERM_EDIT = 16
+PERM_MOVE = 32
+PERM_DELETE = 64
+PERM_CREATE_FOLDER = 128
+PERM_START_SYNC = 256
+PERM_MANAGE_SYNC = 512
+PERM_MANAGE_SHARING = 1024
 
 
 # Predefined AI/manual tool names — the ONLY operations the task engine may
