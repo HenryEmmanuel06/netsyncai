@@ -1,4 +1,4 @@
 {
-  "coordinator_url": "http://localhost:8000",
-  "dashboard_url": "http://localhost:3000"
+  "coordinator_url": "https://netsyncai.onrender.com",
+  "dashboard_url": "https://netsyncai.vercel.app"
 }
