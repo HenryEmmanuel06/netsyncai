@@ -253,7 +253,7 @@ create policy shared_folders_owner on public.shared_folders
   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy shared_folders_subject_read on public.shared_folders
   for select using (exists (select 1 from public.folder_permissions p
-    where p.folder_id = id and p.subject_user_id = auth.uid()));
+    where p.folder_id = shared_folders.id and p.subject_user_id = auth.uid()));
 
 -- permissions: folder owner manages; subject can read own grants
 create policy folder_permissions_owner on public.folder_permissions
@@ -275,7 +275,7 @@ create policy sync_sessions_participant on public.sync_sessions
   for all using (auth.uid() = created_by or exists
     (select 1 from public.sync_participants sp
       join public.devices d on d.id = sp.device_id
-      where sp.session_id = id and d.owner_id = auth.uid()));
+      where sp.session_id = sync_sessions.id and d.owner_id = auth.uid()));
 create policy sync_participants_owner on public.sync_participants
   for all using (exists (select 1 from public.devices d
     where d.id = device_id and d.owner_id = auth.uid()));

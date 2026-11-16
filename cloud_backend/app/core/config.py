@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     jwt_audience: str = "authenticated"
     jwt_algorithms: list[str] = ["HS256", "ES256"]
 
+    # CORS — browser origins allowed to call this API
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
     # Device registry backend: "memory" (dev/test) or "supabase" (prod)
     device_store: str = "memory"
 
