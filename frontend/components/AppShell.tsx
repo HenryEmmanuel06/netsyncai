@@ -7,7 +7,7 @@ import {
   Bot, ChevronDown, FolderGit2, LayoutDashboard, MonitorSmartphone,
   History, RefreshCw, Settings, ShieldCheck, LogOut, Boxes,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, API_URL } from "@/lib/api";
 import { useAuth, type Auth } from "@/lib/useAuth";
 import { initials } from "@/lib/format";
 import { StatusDot } from "@/components/ui";
@@ -23,6 +23,35 @@ const NAV = [
   { href: "/activity", label: "Activity", icon: History },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+function BackendBadge() {
+  const [state, setState] = useState<"checking" | "online" | "down">("checking");
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const r = await fetch(`${API_URL}/health`, { cache: "no-store" });
+        if (alive) setState(r.ok ? "online" : "down");
+      } catch {
+        if (alive) setState("down");
+      }
+    };
+    check();
+    const t = setInterval(check, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  const cfg = {
+    checking: { label: "Backend: connecting…", cls: "badge-amber", dot: "bg-[var(--color-warn)]" },
+    online: { label: "Backend: connected", cls: "badge-green", dot: "bg-[var(--color-online)]" },
+    down: { label: "Backend: unreachable", cls: "badge-red", dot: "bg-[var(--color-danger)]" },
+  }[state];
+  return (
+    <span className={`badge ${cfg.cls}`} title={`${API_URL}\n${state === "down" ? "The page will retry every 30s — the backend may be waking up." : ""}`}>
+      <span className={`inline-block h-1.5 w-1.5 rounded-full ${cfg.dot} pulse-dot`} />
+      {cfg.label}
+    </span>
+  );
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -109,7 +138,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[var(--color-border)] bg-[rgba(12,12,18,0.85)] px-6 backdrop-blur">
-          <div className="text-sm text-[var(--color-text-dim)]">
+          <div className="flex items-center gap-3 text-sm text-[var(--color-text-dim)]">
+            <BackendBadge />
             {NAV.find((n) => n.href === pathname)?.label ?? "NetSync AI"}
           </div>
           <div className="relative" ref={menuRef}>
