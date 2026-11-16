@@ -48,6 +48,18 @@ export interface TaskStep {
   error?: string | null;
 }
 
+export interface SharedFolder {
+  id: string;
+  owner_id: string;
+  device_id: string;
+  device_name: string;
+  label: string;
+  root_path: string;
+  created_at?: string;
+  permissions?: number;
+  grant_id?: string;
+}
+
 export interface TaskResult {
   summary: string | null;
   needs_confirmation: boolean;

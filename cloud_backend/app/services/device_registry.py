@@ -75,6 +75,34 @@ class DeviceStore(Protocol):
     async def list_sync(self, owner_id: str) -> list[dict]: ...
     async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict: ...
     async def get_sync_participants(self, session_id: str) -> list[dict]: ...
+    async def get_active_syncs_for_device(self, device_id: str) -> list[dict]: ...
+
+    # ── sharing & permissions ──
+    async def create_shared_folder(
+        self, owner_id: str, device_id: str, label: str, root_path: str
+    ) -> dict: ...
+    async def list_shares_owned(self, owner_id: str) -> list[dict]: ...
+    async def list_shares_granted(self, user_id: str) -> list[dict]: ...
+    async def add_grant(
+        self, folder_id: str, subject_user_id: str, permissions: int, granted_by: str
+    ) -> dict: ...
+    async def revoke_grant(self, folder_id: str, grant_id: str, owner_id: str) -> None: ...
+    async def list_grants(self, folder_id: str) -> list[dict]: ...
+    async def delete_share(self, owner_id: str, folder_id: str) -> None: ...
+    async def effective_permissions(
+        self, user_id: str, device_id: str, path: str
+    ) -> int:
+        """Bitmask of all grant permissions for user on shared folders of
+        device_id whose root_path prefixes `path`. 0 = no access."""
+        ...
+    async def granted_roots(self, user_id: str, device_id: str) -> list[dict]:
+        """[{root_path, permissions}] a non-owner user holds on this device."""
+        ...
+    async def get_share(self, folder_id: str) -> dict | None: ...
+    async def resolve_user(self, subject: str) -> str | None:
+        """email/handle/uuid -> user_id (supabase impl resolves; memory
+        impl accepts uuid strings)."""
+        ...
 
 
 class InMemoryDeviceStore:
@@ -269,3 +297,115 @@ class InMemoryDeviceStore:
                         "peer_device_id": peer, "mode": s["mode"],
                     })
         return out
+
+    # ── sharing & permissions ──
+
+    async def create_shared_folder(
+        self, owner_id: str, device_id: str, label: str, root_path: str
+    ) -> dict:
+        if not hasattr(self, "_shares"):
+            self._shares = {}
+            self._grants = {}
+        share = {
+            "id": str(uuid.uuid4()),
+            "owner_id": owner_id,
+            "device_id": device_id,
+            "device_name": self._devices.get(device_id, {}).get("name", ""),
+            "label": label or root_path,
+            "root_path": root_path,
+            "created_at": _now(),
+        }
+        self._shares[share["id"]] = share
+        return share
+
+    async def list_shares_owned(self, owner_id: str) -> list[dict]:
+        return [
+            s for s in getattr(self, "_shares", {}).values()
+            if s["owner_id"] == owner_id
+        ]
+
+    async def list_shares_granted(self, user_id: str) -> list[dict]:
+        out = []
+        for g in getattr(self, "_grants", {}).values():
+            if g["subject_user_id"] != user_id:
+                continue
+            share = getattr(self, "_shares", {}).get(g["folder_id"])
+            if share:
+                out.append({**share, "permissions": g["permissions_granted"],
+                            "grant_id": g["id"]})
+        return out
+
+    async def add_grant(
+        self, folder_id: str, subject_user_id: str, permissions: int, granted_by: str
+    ) -> dict:
+        share = getattr(self, "_shares", {}).get(folder_id)
+        if not share:
+            raise DeviceNotFound(folder_id)
+        grant = {
+            "id": str(uuid.uuid4()),
+            "folder_id": folder_id,
+            "subject_user_id": subject_user_id,
+            "permissions_granted": permissions,
+            "granted_by": granted_by,
+            "created_at": _now(),
+        }
+        self._grants[grant["id"]] = grant
+        return grant
+
+    async def revoke_grant(self, folder_id: str, grant_id: str, owner_id: str) -> None:
+        grant = getattr(self, "_grants", {}).get(grant_id)
+        share = getattr(self, "_shares", {}).get(folder_id)
+        if not grant or not share or share["owner_id"] != owner_id:
+            raise DeviceNotFound(grant_id)
+        del self._grants[grant_id]
+
+    async def list_grants(self, folder_id: str) -> list[dict]:
+        return [
+            g for g in getattr(self, "_grants", {}).values()
+            if g["folder_id"] == folder_id
+        ]
+
+    async def delete_share(self, owner_id: str, folder_id: str) -> None:
+        share = getattr(self, "_shares", {}).get(folder_id)
+        if not share or share["owner_id"] != owner_id:
+            raise DeviceNotFound(folder_id)
+        del self._shares[folder_id]
+        for gid in [g["id"] for g in self._grants.values() if g["folder_id"] == folder_id]:
+            del self._grants[gid]
+
+    async def effective_permissions(
+        self, user_id: str, device_id: str, path: str
+    ) -> int:
+        bits = 0
+        norm = path.replace("/", "\\").lower().rstrip("\\")
+        for g in getattr(self, "_grants", {}).values():
+            if g["subject_user_id"] != user_id:
+                continue
+            share = getattr(self, "_shares", {}).get(g["folder_id"])
+            if not share or share["device_id"] != device_id:
+                continue
+            root = share["root_path"].replace("/", "\\").lower().rstrip("\\")
+            if norm == root or norm.startswith(root + "\\"):
+                bits |= g["permissions_granted"]
+        return bits
+
+    async def granted_roots(self, user_id: str, device_id: str) -> list[dict]:
+        """[{root_path, permissions}] the user has on this device."""
+        out = []
+        for g in getattr(self, "_grants", {}).values():
+            if g["subject_user_id"] != user_id:
+                continue
+            share = getattr(self, "_shares", {}).get(g["folder_id"])
+            if share and share["device_id"] == device_id:
+                out.append({"root_path": share["root_path"],
+                            "permissions": g["permissions_granted"]})
+        return out
+
+    async def get_share(self, folder_id: str) -> dict | None:
+        return getattr(self, "_shares", {}).get(folder_id)
+
+    async def resolve_user(self, subject: str) -> str | None:
+        try:
+            return str(uuid.UUID(subject))
+        except ValueError:
+            return None

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { getSupabaseBrowser, supabaseConfigured } from "@/lib/supabase";
-import type { Device, RemoteFileEntry } from "@/types";
+import type { Device, RemoteFileEntry, SharedFolder } from "@/types";
 import {
   Download, FilePlus2, FolderPlus, Pencil, RefreshCw, Search, Trash2,
 } from "lucide-react";
@@ -26,6 +26,7 @@ const API = process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000";
 export default function FilesPage() {
   const [token, setToken] = useState<string | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [shared, setShared] = useState<SharedFolder[]>([]);
   const [deviceId, setDeviceId] = useState("");
   const [roots, setRoots] = useState<RootFolder[]>([]);
   const [path, setPath] = useState("");
@@ -42,8 +43,14 @@ export default function FilesPage() {
       const { data } = await sb!.auth.getSession();
       if (!data.session) { setError("Sign in first"); return; }
       setToken(data.session.access_token);
-      const devs = await apiFetch<Device[]>("/api/v1/devices", data.session.access_token);
+      const [devs, shares] = await Promise.all([
+        apiFetch<Device[]>("/api/v1/devices", data.session.access_token),
+        apiFetch<{ owned: SharedFolder[]; granted: SharedFolder[] }>(
+          "/api/v1/sharing", data.session.access_token,
+        ),
+      ]);
       setDevices(devs.filter((d) => !d.revoked_at));
+      setShared(shares.granted);
     })();
   }, []);
 
@@ -63,13 +70,20 @@ export default function FilesPage() {
     }
   }, [token]);
 
-  function selectDevice(id: string) {
-    setDeviceId(id);
+  function selectDevice(sel: string) {
     setPath("");
     setRoots([]);
     setEntries([]);
     setResults(null);
-    if (id) browse(id, "");
+    if (sel.startsWith("shared:")) {
+      const share = shared.find((s) => `shared:${s.id}` === sel);
+      if (!share) return;
+      setDeviceId(share.device_id);
+      browse(share.device_id, share.root_path);
+      return;
+    }
+    setDeviceId(sel);
+    if (sel) browse(sel, "");
   }
 
   async function search(e: React.FormEvent) {
@@ -162,6 +176,15 @@ export default function FilesPage() {
               {d.name} ({d.status})
             </option>
           ))}
+          {shared.length > 0 && (
+            <optgroup label="Shared with you">
+              {shared.map((s) => (
+                <option key={s.id} value={`shared:${s.id}`}>
+                  {s.label || s.root_path} — {s.device_name}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
 
         <form onSubmit={search} className="flex flex-1 gap-2">

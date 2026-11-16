@@ -18,6 +18,7 @@ import logging
 import sys
 from pathlib import Path
 
+from agent_config import default_coordinator
 from database.db import connect, default_data_dir, get_setting, set_setting
 from indexing.indexer import index_folder, register_folder, search_files
 from networking.coordinator import PairingFailed, redeem_pairing, run_forever
@@ -94,7 +95,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     conn = connect(args.data_dir)
     device_id = get_setting(conn, "device_id")
     credential = get_setting(conn, "device_credential")
-    coordinator = get_setting(conn, "coordinator_url") or args.coordinator
+    coordinator = (
+        args.coordinator
+        or get_setting(conn, "coordinator_url")
+        or default_coordinator()
+    )
     if not device_id or not credential:
         print("not paired — run `main.py pair <code>` first", file=sys.stderr)
         return 2
@@ -120,12 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     pp = sub.add_parser("pair")
     pp.add_argument("code", help="8-character code from the web dashboard")
-    pp.add_argument("--coordinator", default="http://localhost:8000")
+    pp.add_argument("--coordinator", default=default_coordinator())
     pp.add_argument("--force", action="store_true")
     pp.set_defaults(fn=cmd_pair)
 
     pr = sub.add_parser("run")
-    pr.add_argument("--coordinator", default=None)
+    pr.add_argument("--coordinator", default=None,
+                    help="override the saved/bundled coordinator URL")
     pr.set_defaults(fn=cmd_run)
 
     pi = sub.add_parser("index")

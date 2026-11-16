@@ -229,3 +229,242 @@ class SupabaseDeviceStore:
             "/devices", params={"id": f"eq.{device_id}"}, json={"status": "offline"},
         )
         r.raise_for_status()
+
+    # ── sync sessions ──
+
+    async def create_sync(
+        self, owner_id: str, a_device_id: str, a_path: str,
+        b_device_id: str, b_path: str, mode: str,
+    ) -> dict:
+        r = await self._client.post(
+            "/sync_sessions",
+            json={
+                "name": f"{a_path} ↔ {b_path}",
+                "mode": mode, "state": "active", "created_by": owner_id,
+            },
+        )
+        r.raise_for_status()
+        session = r.json()[0]
+        await self._client.post(
+            "/sync_participants",
+            json=[
+                {"session_id": session["id"], "device_id": a_device_id, "root_path": a_path},
+                {"session_id": session["id"], "device_id": b_device_id, "root_path": b_path},
+            ],
+        )
+        session["participants"] = [
+            {"device_id": a_device_id, "root": a_path},
+            {"device_id": b_device_id, "root": b_path},
+        ]
+        return session
+
+    async def list_sync(self, owner_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/sync_sessions",
+            params={"created_by": f"eq.{owner_id}", "select": "*,sync_participants(*)"},
+        )
+        r.raise_for_status()
+        return [
+            {**s, "participants": [
+                {"device_id": p["device_id"], "root": p.get("root_path", "")}
+                for p in s.pop("sync_participants", [])
+            ]}
+            for s in r.json()
+        ]
+
+    async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict:
+        r = await self._client.patch(
+            "/sync_sessions",
+            params={"id": f"eq.{session_id}", "created_by": f"eq.{owner_id}"},
+            json={"state": state, "updated_at": _now().isoformat()},
+        )
+        r.raise_for_status()
+        if not r.json():
+            raise DeviceNotFound(session_id)
+        s = r.json()[0]
+        s["participants"] = await self.get_sync_participants(session_id)
+        return s
+
+    async def get_sync_participants(self, session_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/sync_participants",
+            params={"session_id": f"eq.{session_id}"},
+        )
+        r.raise_for_status()
+        return [
+            {"device_id": p["device_id"], "root": p.get("root_path", "")}
+            for p in r.json()
+        ]
+
+    async def get_active_syncs_for_device(self, device_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/sync_participants",
+            params={
+                "device_id": f"eq.{device_id}",
+                "select": "root_path,session_id,sync_sessions(id,state,mode,sync_participants(device_id))",
+            },
+        )
+        r.raise_for_status()
+        out = []
+        for row in r.json():
+            s = row.get("sync_sessions") or {}
+            if s.get("state") != "active":
+                continue
+            peer = next(
+                (p["device_id"] for p in s.get("sync_participants", [])
+                 if p["device_id"] != device_id), None,
+            )
+            if peer:
+                out.append({
+                    "session_id": row["session_id"], "root": row["root_path"],
+                    "peer_device_id": peer, "mode": s["mode"],
+                })
+        return out
+
+    # ── sharing & permissions ──
+
+    async def create_shared_folder(
+        self, owner_id: str, device_id: str, label: str, root_path: str
+    ) -> dict:
+        r = await self._client.post(
+            "/shared_folders",
+            json={"owner_id": owner_id, "device_id": device_id,
+                  "label": label or root_path, "path_hint": root_path},
+        )
+        r.raise_for_status()
+        row = r.json()[0]
+        return self._share_row(row)
+
+    def _share_row(self, row: dict) -> dict:
+        return {
+            "id": row["id"], "owner_id": row["owner_id"],
+            "device_id": row["device_id"], "device_name": "",
+            "label": row["label"], "root_path": row["path_hint"],
+            "created_at": row["created_at"],
+        }
+
+    async def list_shares_owned(self, owner_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/shared_folders",
+            params={"owner_id": f"eq.{owner_id}",
+                    "select": "*,devices(name)"},
+        )
+        r.raise_for_status()
+        return [
+            {**self._share_row(s), "device_name": (s.get("devices") or {}).get("name", "")}
+            for s in r.json()
+        ]
+
+    async def list_shares_granted(self, user_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/folder_permissions",
+            params={
+                "subject_user_id": f"eq.{user_id}",
+                "select": "id,permissions_granted,folder_id,shared_folders(*,devices(name))",
+            },
+        )
+        r.raise_for_status()
+        out = []
+        for g in r.json():
+            s = g.get("shared_folders")
+            if not s:
+                continue
+            out.append({
+                **self._share_row(s),
+                "device_name": (s.get("devices") or {}).get("name", ""),
+                "permissions": g["permissions_granted"],
+                "grant_id": g["id"],
+            })
+        return out
+
+    async def add_grant(
+        self, folder_id: str, subject_user_id: str, permissions: int, granted_by: str
+    ) -> dict:
+        role = "editor" if permissions > 3 else "viewer"
+        r = await self._client.post(
+            "/folder_permissions",
+            json={
+                "folder_id": folder_id, "subject_user_id": subject_user_id,
+                "role": role, "permissions_granted": permissions,
+                "granted_by": granted_by,
+            },
+        )
+        r.raise_for_status()
+        return r.json()[0]
+
+    async def revoke_grant(self, folder_id: str, grant_id: str, owner_id: str) -> None:
+        share = await self.get_share(folder_id)
+        if not share or share["owner_id"] != owner_id:
+            raise DeviceNotFound(grant_id)
+        r = await self._client.delete(
+            "/folder_permissions", params={"id": f"eq.{grant_id}"},
+        )
+        r.raise_for_status()
+
+    async def list_grants(self, folder_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/folder_permissions",
+            params={"folder_id": f"eq.{folder_id}"},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def delete_share(self, owner_id: str, folder_id: str) -> None:
+        r = await self._client.delete(
+            "/shared_folders",
+            params={"id": f"eq.{folder_id}", "owner_id": f"eq.{owner_id}"},
+        )
+        r.raise_for_status()
+
+    async def effective_permissions(
+        self, user_id: str, device_id: str, path: str
+    ) -> int:
+        bits = 0
+        norm = path.replace("/", "\\").lower().rstrip("\\")
+        for g in await self.granted_roots(user_id, device_id):
+            root = g["root_path"].replace("/", "\\").lower().rstrip("\\")
+            if norm == root or norm.startswith(root + "\\"):
+                bits |= g["permissions"]
+        return bits
+
+    async def granted_roots(self, user_id: str, device_id: str) -> list[dict]:
+        # join grants to shares on this device
+        r = await self._client.get(
+            "/folder_permissions",
+            params={
+                "subject_user_id": f"eq.{user_id}",
+                "select": "permissions_granted,shared_folders(device_id,path_hint)",
+            },
+        )
+        r.raise_for_status()
+        return [
+            {"root_path": g["shared_folders"]["path_hint"],
+             "permissions": g["permissions_granted"]}
+            for g in r.json()
+            if g.get("shared_folders") and g["shared_folders"]["device_id"] == device_id
+        ]
+
+    async def get_share(self, folder_id: str) -> dict | None:
+        r = await self._client.get(
+            "/shared_folders", params={"id": f"eq.{folder_id}"},
+        )
+        r.raise_for_status()
+        rows = r.json()
+        return self._share_row(rows[0]) if rows else None
+
+    async def resolve_user(self, subject: str) -> str | None:
+        # uuid → direct; else email or handle via profiles
+        try:
+            return str(uuid.UUID(subject))
+        except ValueError:
+            pass
+        r = await self._client.get(
+            "/profiles",
+            params={
+                "or": f"(email.eq.{subject},handle.eq.{subject.lstrip('@')})",
+                "select": "id",
+            },
+        )
+        r.raise_for_status()
+        rows = r.json()
+        return rows[0]["id"] if rows else None

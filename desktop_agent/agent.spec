@@ -10,7 +10,10 @@ a = Analysis(
     ["main.py"],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[("database/schema.sql", "database")],
+    datas=[
+        ("database/schema.sql", "database"),
+        ("build_config.json", "."),
+    ],
     hiddenimports=["watchdog.observers.winapi"],
     hookspath=[],
     excludes=[],

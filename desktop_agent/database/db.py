@@ -12,6 +12,9 @@ def default_data_dir() -> Path:
     """Writable per-user data dir — never next to the executable."""
     import os
 
+    override = os.environ.get("NETSYNC_DATA_DIR")
+    if override:
+        return Path(override)
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     return Path(base) / "NetSyncAI"
 

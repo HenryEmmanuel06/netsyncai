@@ -18,6 +18,10 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import current_auth, get_device_store
 from app.errors import http_404, http_409
+from app.protocol import (
+    PERM_BROWSE, PERM_CREATE_FOLDER, PERM_DELETE, PERM_DOWNLOAD,
+    PERM_MOVE, PERM_RENAME, PERM_UPLOAD,
+)
 from app.networking import transfers
 from app.networking.connections import manager
 from app.orchestration import dispatcher
@@ -54,6 +58,36 @@ async def _owned_device(
         raise http_404("device not found")
 
 
+async def _authorize(
+    device_id: str, auth: AuthContext, store: DeviceStore,
+    path: str, required_bit: int,
+) -> tuple[DeviceResponse, bool]:
+    """Owner → (device, True). Collaborator → (device, False) iff a grant
+    on a shared folder covering `path` includes required_bit. Denials are
+    404s — device existence is not leaked."""
+    try:
+        return await store.get_device(auth.user_id, device_id), True
+    except DeviceNotFound:
+        pass
+    try:
+        dev = await store.get_device_by_id(device_id)
+    except DeviceNotFound:
+        raise http_404("device not found")
+    bits = await store.effective_permissions(auth.user_id, device_id, path)
+    if not bits or not (bits & required_bit):
+        raise http_404("device not found")
+    return dev, False
+
+
+def _under_roots(path: str, roots: list[dict]) -> bool:
+    norm = path.replace("/", "\\").lower().rstrip("\\")
+    for r in roots:
+        root = r["root_path"].replace("/", "\\").lower().rstrip("\\")
+        if norm == root or norm.startswith(root + "\\"):
+            return True
+    return False
+
+
 def _map_errors(fn):
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
@@ -76,8 +110,27 @@ async def browse(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
-    result = await dispatch(device_id, "browse_folder", {"path": path})
+    if not path:
+        # roots listing: owners see all; collaborators see only granted roots
+        try:
+            await store.get_device(auth.user_id, device_id)
+            is_owner = True
+        except DeviceNotFound:
+            is_owner = False
+        if is_owner:
+            result = await dispatch(device_id, "browse_folder", {"path": ""})
+        else:
+            roots = await store.granted_roots(auth.user_id, device_id)
+            roots = [r for r in roots if r["permissions"] & PERM_BROWSE]
+            if not roots:
+                raise http_404("device not found")
+            return BrowseResponse(path="", entries=[], roots=[
+                {"id": 0, "path": r["root_path"], "label": "shared",
+                 "access": "granted"} for r in roots
+            ])
+    else:
+        await _authorize(device_id, auth, store, path, PERM_BROWSE)
+        result = await dispatch(device_id, "browse_folder", {"path": path})
     return BrowseResponse(
         path=path,
         entries=result.get("entries", []),
@@ -94,11 +147,26 @@ async def search(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
+    try:
+        await store.get_device(auth.user_id, device_id)
+        allowed_roots = None
+    except DeviceNotFound:
+        allowed_roots = [
+            r for r in await store.granted_roots(auth.user_id, device_id)
+            if r["permissions"] & PERM_BROWSE
+        ]
+        if not allowed_roots:
+            raise http_404("device not found")
     result = await dispatch(
         device_id, "search_files", {"query": q, "ext": ext}
     )
-    return SearchResponse(query=q, results=result.get("results", []))
+    results = result.get("results", [])
+    if allowed_roots is not None:
+        results = [
+            r for r in results
+            if _under_roots(r.get("rel_path", ""), allowed_roots)
+        ]
+    return SearchResponse(query=q, results=results)
 
 
 @router.post("/rename")
@@ -109,7 +177,7 @@ async def rename(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, req.path, PERM_RENAME)
     return await dispatch(
         device_id, "rename_file",
         {"path": req.path, "new_name": req.new_name},
@@ -124,7 +192,8 @@ async def move(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, req.src, PERM_MOVE)
+    await _authorize(device_id, auth, store, req.dst, PERM_MOVE)
     return await dispatch(
         device_id, "move_file", {"src": req.src, "dst": req.dst}
     )
@@ -138,7 +207,8 @@ async def copy(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, req.src, PERM_DOWNLOAD)
+    await _authorize(device_id, auth, store, req.dst, PERM_UPLOAD)
     return await dispatch(
         device_id, "copy_file", {"src": req.src, "dst": req.dst}
     )
@@ -152,7 +222,7 @@ async def mkdir(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, req.path, PERM_CREATE_FOLDER)
     return await dispatch(device_id, "create_folder", {"path": req.path})
 
 
@@ -164,7 +234,7 @@ async def delete(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, path, PERM_DELETE)
     return await dispatch(device_id, "delete_file", {"path": path})
 
 
@@ -180,7 +250,7 @@ async def download(
 ):
     """Agent → relay → browser. Agent sends TRANSFER_BEGIN/CHUNK/END; we
     stream to the client and verify the SHA-256 announced in BEGIN."""
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, path, PERM_DOWNLOAD)
     transfer_id = str(uuid.uuid4())
     queue = transfers.register(transfer_id)
 
@@ -245,7 +315,7 @@ async def upload(
 ):
     """Browser → relay → agent. Chunks the upload body over the WSS; the
     agent writes to a partial file, verifies, and atomically renames."""
-    await _owned_device(device_id, auth, store)
+    await _authorize(device_id, auth, store, path, PERM_UPLOAD)
     transfer_id = str(uuid.uuid4())
     hasher = hashlib.sha256()
 

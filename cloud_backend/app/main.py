@@ -11,7 +11,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import ai, devices, files, health, pairing, sync, ws_agent
+from app.api import ai, devices, files, health, pairing, sharing, sync, ws_agent
 from app.core.config import settings
 
 logging.basicConfig(
@@ -39,4 +39,5 @@ app.include_router(pairing.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
 app.include_router(sync.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/v1")
+app.include_router(sharing.router, prefix="/api/v1")
 app.include_router(ws_agent.router)
