@@ -73,7 +73,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "agent_version": AGENT_VERSION,
         "device_id": device_id,
         "paired": device_id is not None,
-        "coordinator_url": get_setting(conn, "coordinator_url"),
+        "coordinator_url": get_setting(conn, "coordinator_url") or default_coordinator(),
         "indexed_folders": [dict(f) for f in folders],
         "data_dir": str(args.data_dir),
     }, indent=2))
