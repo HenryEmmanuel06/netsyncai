@@ -77,6 +77,37 @@ async def list_sync(
     return await store.list_sync(auth.user_id)
 
 
+@router.get("/{session_id}/live")
+async def sync_live(
+    session_id: str,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    """Live per-side counters from the agents' sync engines — applied /
+    emitted / pending ops, merged across both participants."""
+    sessions = await store.list_sync(auth.user_id)
+    session = next((s for s in sessions if s["id"] == session_id), None)
+    if session is None:
+        raise http_404("sync session not found")
+    sides = []
+    for p in session["participants"]:
+        side = {"device_id": p["device_id"], "root": p["root"], "online": False,
+                "applied_ops": 0, "emitted_ops": 0, "pending_ops": 0, "paused": False}
+        try:
+            res = await dispatch(p["device_id"], "get_device_status", {}, timeout=10)
+            sess = (res.get("sync_sessions") or {}).get(session_id)
+            if sess:
+                side.update({k: sess.get(k, side[k]) for k in
+                             ("applied_ops", "emitted_ops", "pending_ops", "paused")})
+                side["online"] = True
+        except Exception:
+            pass
+        sides.append(side)
+    return {"session_id": session_id, "sides": sides,
+            "applied_ops": sum(s["applied_ops"] for s in sides),
+            "pending_ops": sum(s["pending_ops"] for s in sides)}
+
+
 @router.post("/{session_id}/{action}", response_model=SyncSessionResponse)
 async def sync_action(
     session_id: str,

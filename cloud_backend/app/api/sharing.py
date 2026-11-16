@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status
 
+from pydantic import BaseModel
+
 from app.api.deps import current_auth, get_device_store
 from app.errors import http_403, http_404, http_422
 from app.schemas.sharing import (
@@ -22,9 +24,25 @@ from app.schemas.sharing import (
 )
 from app.security.jwt import AuthContext
 from app.services.activity import log_activity
-from app.services.device_registry import DeviceNotFound, DeviceStore
+from app.services.device_registry import DeviceNotFound, DeviceStore, GrantError
 
 router = APIRouter(prefix="/sharing", tags=["sharing"])
+
+ROLE_BITS = {"viewer": 3, "editor": 255, "manager": 2047}
+
+
+class AccessRequestBody(BaseModel):
+    role: str = "viewer"            # role the requester is asking for
+
+
+class BlockBody(BaseModel):
+    subject: str                    # email / user id / @handle
+
+
+def _map_store_errors(exc: Exception):
+    if isinstance(exc, DeviceNotFound):
+        return http_404("not found")
+    return http_422(str(exc))
 
 
 @router.post("", response_model=SharedFolderResponse,
@@ -128,3 +146,108 @@ async def revoke_grant(
     except DeviceNotFound:
         raise http_404("grant not found")
     await log_activity(store, auth.user_id, "grant.revoked", target=folder_id)
+
+
+# ── access requests ────────────────────────────────────────────────────────────
+# A granted user can request a role upgrade; the owner approves (creating the
+# grant) or denies. Both directions are listed for the UI tabs.
+
+@router.post("/{folder_id}/request", status_code=status.HTTP_201_CREATED)
+async def request_access(
+    folder_id: str,
+    body: AccessRequestBody,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    share = await store.get_share(folder_id)
+    if not share:
+        raise http_404("share not found")
+    try:
+        req = await store.request_access(auth.user_id, folder_id, body.role)
+    except (DeviceNotFound, GrantError) as exc:
+        raise _map_store_errors(exc)
+    await log_activity(store, auth.user_id, "share.access_requested",
+                       device_id=share["device_id"], target=share["root_path"],
+                       metadata={"role": body.role})
+    return req
+
+
+@router.get("/requests")
+async def list_requests(
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    return {
+        "incoming": await store.list_access_requests(auth.user_id, "incoming"),
+        "outgoing": await store.list_access_requests(auth.user_id, "outgoing"),
+    }
+
+
+@router.post("/requests/{request_id}/approve")
+async def approve_request(
+    request_id: str,
+    body: AccessRequestBody,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    try:
+        req = await store.resolve_access_request(
+            auth.user_id, request_id, True, ROLE_BITS[body.role])
+    except (DeviceNotFound, GrantError) as exc:
+        raise _map_store_errors(exc)
+    await log_activity(store, auth.user_id, "grant.added", target=req["folder_id"],
+                       metadata={"via": "access_request", "role": body.role})
+    return req
+
+
+@router.post("/requests/{request_id}/deny")
+async def deny_request(
+    request_id: str,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    try:
+        req = await store.resolve_access_request(
+            auth.user_id, request_id, False, 0)
+    except (DeviceNotFound, GrantError) as exc:
+        raise _map_store_errors(exc)
+    await log_activity(store, auth.user_id, "share.access_denied", target=req["folder_id"])
+    return req
+
+
+# ── user blocking ─────────────────────────────────────────────────────────────
+# An owner's block overrides every grant they've ever issued to that user
+# (enforced inside effective_permissions / granted_roots on both stores).
+
+@router.get("/blocks")
+async def list_blocks(
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    return {"blocked": await store.list_blocked(auth.user_id)}
+
+
+@router.post("/blocks", status_code=status.HTTP_201_CREATED)
+async def block_user(
+    body: BlockBody,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    subject = await store.resolve_user(body.subject)
+    if subject is None:
+        raise http_422(f"cannot resolve user '{body.subject}'")
+    try:
+        await store.block_user(auth.user_id, subject)
+    except GrantError as exc:
+        raise http_422(str(exc))
+    await log_activity(store, auth.user_id, "user.blocked", metadata={"subject": body.subject})
+    return {"blocked": subject}
+
+
+@router.delete("/blocks/{subject_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unblock_user(
+    subject_id: str,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    await store.unblock_user(auth.user_id, subject_id)

@@ -11,6 +11,30 @@ import { ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, StatusDot } from
 import { basename, formatDate } from "@/lib/format";
 import type { Device, SharedFolder, SharedFolderInfo, SyncSession } from "@/types";
 
+interface LiveSync { applied_ops: number; pending_ops: number; sides: { device_id: string; online: boolean; paused: boolean }[] }
+
+function LiveOps({ sessionId, token }: { sessionId: string; token: string }) {
+  const [live, setLive] = useState<LiveSync | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => apiFetch<LiveSync>(`/api/v1/sync/${sessionId}/live`, token)
+      .then((r) => alive && setLive(r)).catch(() => {});
+    load();
+    const t = setInterval(load, 10000);
+    return () => { alive = false; clearInterval(t); };
+  }, [sessionId, token]);
+  if (!live) return null;
+  const onlineSides = live.sides.filter((s) => s.online).length;
+  return (
+    <div className="mt-2 flex items-center gap-3 text-[11px] text-[var(--color-text-dim)]">
+      <span>{live.applied_ops} ops applied</span>
+      <span>{live.pending_ops} pending</span>
+      <span>{onlineSides}/{live.sides.length} sides live</span>
+      {live.sides.some((s) => s.paused) && <span className="badge badge-amber">paused on device</span>}
+    </div>
+  );
+}
+
 const STATE_STYLE: Record<string, string> = {
   active: "badge-green",
   paused: "badge-amber",
@@ -160,6 +184,9 @@ export default function SyncPage() {
                       </span>
                     ))}
                   </div>
+                  {(s.state === "active" || s.state === "paused") && (
+                    <LiveOps sessionId={s.id} token={token!} />
+                  )}
                 </div>
                 <div className="flex gap-2">
                   {s.state === "active" && (

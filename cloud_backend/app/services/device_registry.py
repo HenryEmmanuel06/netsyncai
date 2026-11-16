@@ -22,6 +22,10 @@ class DeviceNotFound(Exception):
     pass
 
 
+class GrantError(Exception):
+    """Sharing/access-request violation — maps to 409/403 at the API layer."""
+
+
 class PairingError(Exception):
     """Invalid, expired, or already-consumed pairing code."""
 
@@ -128,6 +132,16 @@ class DeviceStore(Protocol):
     async def get_preferences(self, user_id: str) -> dict: ...
     async def set_preferences(self, user_id: str, prefs: dict) -> dict: ...
     async def ensure_profile(self, user_id: str, email: str) -> None: ...
+
+    # ── access requests + user blocking ───────────────────────────────────
+    async def request_access(self, requester_id: str, folder_id: str, role: str) -> dict: ...
+    async def list_access_requests(self, user_id: str, direction: str) -> list[dict]: ...
+    async def resolve_access_request(
+        self, owner_id: str, request_id: str, approve: bool, permissions: int
+    ) -> dict: ...
+    async def block_user(self, blocker_id: str, subject_id: str) -> None: ...
+    async def unblock_user(self, blocker_id: str, subject_id: str) -> None: ...
+    async def list_blocked(self, blocker_id: str) -> list[dict]: ...
 
 
 class InMemoryDeviceStore:
@@ -437,7 +451,7 @@ class InMemoryDeviceStore:
             if g["subject_user_id"] != user_id:
                 continue
             share = getattr(self, "_shares", {}).get(g["folder_id"])
-            if share:
+            if share and not self._is_blocked(share["owner_id"], user_id):
                 out.append({**share, "permissions": g["permissions_granted"],
                             "grant_id": g["id"]})
         return out
@@ -494,7 +508,12 @@ class InMemoryDeviceStore:
             root = share["root_path"].replace("/", "\\").lower().rstrip("\\")
             if norm == root or norm.startswith(root + "\\"):
                 bits |= g["permissions_granted"]
+            if self._is_blocked(share["owner_id"], user_id):
+                bits = 0
         return bits
+
+    def _is_blocked(self, owner_id: str, user_id: str) -> bool:
+        return user_id in getattr(self, "_blocked", {}).get(owner_id, set())
 
     async def granted_roots(self, user_id: str, device_id: str) -> list[dict]:
         """[{root_path, permissions}] the user has on this device."""
@@ -503,7 +522,8 @@ class InMemoryDeviceStore:
             if g["subject_user_id"] != user_id:
                 continue
             share = getattr(self, "_shares", {}).get(g["folder_id"])
-            if share and share["device_id"] == device_id:
+            if (share and share["device_id"] == device_id
+                    and not self._is_blocked(share["owner_id"], user_id)):
                 out.append({"root_path": share["root_path"],
                             "permissions": g["permissions_granted"]})
         return out
@@ -516,3 +536,75 @@ class InMemoryDeviceStore:
             return str(uuid.UUID(subject))
         except ValueError:
             return None
+
+    # ── access requests + blocking ────────────────────────────────────────
+
+    async def request_access(self, requester_id: str, folder_id: str, role: str) -> dict:
+        share = getattr(self, "_shares", {}).get(folder_id)
+        if not share:
+            raise DeviceNotFound(folder_id)
+        if share["owner_id"] == requester_id:
+            raise GrantError("you own this folder")
+        if role not in ("viewer", "editor", "manager"):
+            raise GrantError("invalid role")
+        if not hasattr(self, "_access_requests"):
+            self._access_requests = {}
+        for r in self._access_requests.values():
+            if (r["folder_id"] == folder_id and r["requester_id"] == requester_id
+                    and r["status"] == "pending"):
+                raise GrantError("request already pending")
+        req = {
+            "id": str(uuid.uuid4()), "requester_id": requester_id,
+            "folder_id": folder_id, "role": role, "status": "pending",
+            "created_at": _now(), "resolved_at": None,
+        }
+        self._access_requests[req["id"]] = req
+        return req
+
+    async def list_access_requests(self, user_id: str, direction: str) -> list[dict]:
+        out = []
+        for r in getattr(self, "_access_requests", {}).values():
+            share = getattr(self, "_shares", {}).get(r["folder_id"])
+            if not share:
+                continue
+            if direction == "incoming" and share["owner_id"] != user_id:
+                continue
+            if direction == "outgoing" and r["requester_id"] != user_id:
+                continue
+            out.append({**r, "folder_label": share["label"],
+                        "device_name": share["device_name"],
+                        "owner_id": share["owner_id"],
+                        "requester_email": None})
+        return sorted(out, key=lambda r: r["created_at"], reverse=True)
+
+    async def resolve_access_request(
+        self, owner_id: str, request_id: str, approve: bool, permissions: int
+    ) -> dict:
+        req = getattr(self, "_access_requests", {}).get(request_id)
+        if not req:
+            raise DeviceNotFound(request_id)
+        share = getattr(self, "_shares", {}).get(req["folder_id"])
+        if not share or share["owner_id"] != owner_id:
+            raise GrantError("only the folder owner can resolve requests")
+        if req["status"] != "pending":
+            raise GrantError("request already resolved")
+        req["status"] = "approved" if approve else "denied"
+        req["resolved_at"] = _now()
+        if approve:
+            await self.add_grant(req["folder_id"], req["requester_id"],
+                                 permissions, owner_id)
+        return req
+
+    async def block_user(self, blocker_id: str, subject_id: str) -> None:
+        if subject_id == blocker_id:
+            raise GrantError("cannot block yourself")
+        if not hasattr(self, "_blocked"):
+            self._blocked = {}
+        self._blocked.setdefault(blocker_id, set()).add(subject_id)
+
+    async def unblock_user(self, blocker_id: str, subject_id: str) -> None:
+        getattr(self, "_blocked", {}).get(blocker_id, set()).discard(subject_id)
+
+    async def list_blocked(self, blocker_id: str) -> list[dict]:
+        return [{"user_id": uid, "email": None}
+                for uid in sorted(getattr(self, "_blocked", {}).get(blocker_id, set()))]

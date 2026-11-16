@@ -37,6 +37,7 @@ from app.schemas.files import (
     BrowseResponse,
     MkdirRequest,
     MoveCopyRequest,
+    PathRequest,
     RenameRequest,
     SearchResponse,
 )
@@ -137,6 +138,37 @@ async def browse(
         entries=result.get("entries", []),
         roots=result.get("roots"),
     )
+
+
+@router.get("/stats")
+@_map_errors
+async def device_stats(
+    device_id: str,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    """Owner-only local stats — disk free on indexed drives, agent
+    version, LibreOffice availability."""
+    await _owned_device(device_id, auth, store)
+    return await dispatch(device_id, "sys_info", {})
+
+
+@router.post("/convert")
+@_map_errors
+async def convert_document(
+    device_id: str,
+    body: PathRequest,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    """Ask the agent to convert a document to PDF (LibreOffice headless).
+    Writes a sibling .pdf — requires upload-level permission."""
+    await _authorize(device_id, auth, store, body.path, PERM_UPLOAD)
+    result = await dispatch(device_id, "convert_document",
+                            {"path": body.path, "to": "pdf"})
+    await log_activity(store, auth.user_id, "file.converted",
+                       device_id=device_id, target=body.path)
+    return result
 
 
 @router.get("/search", response_model=SearchResponse)

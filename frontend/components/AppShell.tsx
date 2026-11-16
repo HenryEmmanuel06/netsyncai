@@ -55,6 +55,28 @@ function BackendBadge() {
   );
 }
 
+function StorageGauge({ deviceId, token }: { deviceId: string; token: string }) {
+  const [drive, setDrive] = useState<{ drive: string; total: number; free: number } | null>(null);
+  useEffect(() => {
+    apiFetch<{ drives: { drive: string; total: number; free: number }[] }>(
+      `/api/v1/devices/${deviceId}/stats`, token,
+    ).then((s) => setDrive(s.drives[0] ?? null)).catch(() => {});
+  }, [deviceId, token]);
+  if (!drive) return null;
+  const usedPct = Math.round(((drive.total - drive.free) / drive.total) * 100);
+  return (
+    <div className="mt-2.5 border-t border-[var(--color-border)] pt-2.5">
+      <div className="flex justify-between text-[10px]">
+        <span>Storage ({drive.drive})</span>
+        <span>{usedPct}% used</span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+        <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${usedPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const auth = useAuth();
@@ -134,6 +156,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="card p-3 text-xs text-[var(--color-text-dim)]">
             <span className="font-medium text-[var(--color-text)]">{online}</span> online ·{" "}
             <span>{devices.length - online}</span> offline
+            {auth.token && devices[0] && devices.find((d) => d.status === "online") && (
+              <StorageGauge deviceId={devices.find((d) => d.status === "online")!.id}
+                token={auth.token} />
+            )}
           </div>
         </div>
       </aside>

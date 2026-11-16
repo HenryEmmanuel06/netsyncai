@@ -19,6 +19,10 @@ class MkdirRequest(BaseModel):
     path: str = Field(min_length=1)
 
 
+class PathRequest(BaseModel):
+    path: str = Field(min_length=1)
+
+
 class FileEntry(BaseModel):
     name: str
     path: str | None = None       # absolute on the device — use for operations

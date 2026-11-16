@@ -18,7 +18,7 @@ import httpx
 
 from app.core.config import settings
 from app.schemas.devices import DeviceRegisterRequest, DeviceResponse
-from app.services.device_registry import DeviceNotFound, PairingError
+from app.services.device_registry import DeviceNotFound, GrantError, PairingError
 
 
 def _now() -> datetime:
@@ -505,6 +505,15 @@ class SupabaseDeviceStore:
             for s in r.json()
         ]
 
+    async def _blockers_of(self, user_id: str) -> set[str]:
+        """Owners who blocked this user — their grants are invisible."""
+        r = await self._client.get(
+            "/blocked_users",
+            params={"blocked_id": f"eq.{user_id}", "select": "blocker_id"},
+        )
+        r.raise_for_status()
+        return {row["blocker_id"] for row in r.json()}
+
     async def list_shares_granted(self, user_id: str) -> list[dict]:
         r = await self._client.get(
             "/folder_permissions",
@@ -514,10 +523,11 @@ class SupabaseDeviceStore:
             },
         )
         r.raise_for_status()
+        blockers = await self._blockers_of(user_id)
         out = []
         for g in r.json():
             s = g.get("shared_folders")
-            if not s:
+            if not s or s.get("owner_id") in blockers:
                 continue
             out.append({
                 **self._share_row(s),
@@ -583,15 +593,18 @@ class SupabaseDeviceStore:
             "/folder_permissions",
             params={
                 "subject_user_id": f"eq.{user_id}",
-                "select": "permissions_granted,shared_folders(device_id,path_hint)",
+                "select": "permissions_granted,shared_folders(device_id,path_hint,owner_id)",
             },
         )
         r.raise_for_status()
+        blockers = await self._blockers_of(user_id)
         return [
             {"root_path": g["shared_folders"]["path_hint"],
              "permissions": g["permissions_granted"]}
             for g in r.json()
-            if g.get("shared_folders") and g["shared_folders"]["device_id"] == device_id
+            if g.get("shared_folders")
+            and g["shared_folders"]["device_id"] == device_id
+            and g["shared_folders"].get("owner_id") not in blockers
         ]
 
     async def get_share(self, folder_id: str) -> dict | None:
@@ -625,3 +638,111 @@ class SupabaseDeviceStore:
         r.raise_for_status()
         rows = r.json()
         return rows[0]["id"] if rows else None
+
+    # ── access requests + blocking ────────────────────────────────────────
+
+    async def request_access(self, requester_id: str, folder_id: str, role: str) -> dict:
+        share = await self.get_share(folder_id)
+        if not share:
+            raise DeviceNotFound(folder_id)
+        if share["owner_id"] == requester_id:
+            raise GrantError("you own this folder")
+        if role not in ("viewer", "editor", "manager"):
+            raise GrantError("invalid role")
+        r = await self._client.get(
+            "/access_requests",
+            params={
+                "folder_id": f"eq.{folder_id}",
+                "requester_id": f"eq.{requester_id}",
+                "status": "eq.pending",
+            },
+        )
+        r.raise_for_status()
+        if r.json():
+            raise GrantError("request already pending")
+        r = await self._client.post(
+            "/access_requests",
+            json={"requester_id": requester_id, "folder_id": folder_id, "role": role},
+        )
+        r.raise_for_status()
+        return r.json()[0]
+
+    async def list_access_requests(self, user_id: str, direction: str) -> list[dict]:
+        select = ("*,shared_folders!inner(label,device_id,owner_id,devices(name)),"
+                  "profiles!access_requests_requester_id_fkey(email)")
+        if direction == "incoming":
+            params = {"select": select, "shared_folders.owner_id": f"eq.{user_id}"}
+        else:
+            params = {"select": select, "requester_id": f"eq.{user_id}"}
+        r = await self._client.get("/access_requests", params=params)
+        r.raise_for_status()
+        out = []
+        for row in r.json():
+            s = row.get("shared_folders") or {}
+            out.append({
+                **{k: row.get(k) for k in ("id", "requester_id", "folder_id",
+                                           "role", "status", "created_at")},
+                "folder_label": s.get("label", ""),
+                "device_name": (s.get("devices") or {}).get("name", ""),
+                "owner_id": s.get("owner_id"),
+                "requester_email": (row.get("profiles") or {}).get("email"),
+            })
+        return sorted(out, key=lambda x: x["created_at"] or "", reverse=True)
+
+    async def resolve_access_request(
+        self, owner_id: str, request_id: str, approve: bool, permissions: int
+    ) -> dict:
+        r = await self._client.get(
+            "/access_requests", params={"id": f"eq.{request_id}"})
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            raise DeviceNotFound(request_id)
+        req = rows[0]
+        share = await self.get_share(req["folder_id"])
+        if not share or share["owner_id"] != owner_id:
+            raise GrantError("only the folder owner can resolve requests")
+        if req["status"] != "pending":
+            raise GrantError("request already resolved")
+        r = await self._client.patch(
+            "/access_requests",
+            params={"id": f"eq.{request_id}"},
+            json={"status": "approved" if approve else "denied",
+                  "resolved_at": _now().isoformat()},
+        )
+        r.raise_for_status()
+        if approve:
+            await self.add_grant(req["folder_id"], req["requester_id"],
+                                 permissions, owner_id)
+        return req
+
+    async def block_user(self, blocker_id: str, subject_id: str) -> None:
+        if subject_id == blocker_id:
+            raise GrantError("cannot block yourself")
+        r = await self._client.post(
+            "/blocked_users",
+            headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
+            json={"blocker_id": blocker_id, "blocked_id": subject_id},
+        )
+        r.raise_for_status()
+
+    async def unblock_user(self, blocker_id: str, subject_id: str) -> None:
+        r = await self._client.delete(
+            "/blocked_users",
+            params={"blocker_id": f"eq.{blocker_id}",
+                    "blocked_id": f"eq.{subject_id}"},
+        )
+        r.raise_for_status()
+
+    async def list_blocked(self, blocker_id: str) -> list[dict]:
+        r = await self._client.get(
+            "/blocked_users",
+            params={
+                "blocker_id": f"eq.{blocker_id}",
+                "select": "blocked_id,profiles!blocked_users_blocked_id_fkey(email)",
+            },
+        )
+        r.raise_for_status()
+        return [{"user_id": row["blocked_id"],
+                 "email": (row.get("profiles") or {}).get("email")}
+                for row in r.json()]

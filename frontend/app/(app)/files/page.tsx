@@ -3,8 +3,9 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  ArrowLeft, CloudOff, Download, FolderPlus, HardDrive, Pencil, Plus,
-  Search, Tag, Trash2, Upload, X,
+  ArrowLeft, Check, ChevronRight, CloudOff, Download, FileText, Folder,
+  FolderPlus, HardDrive, LayoutGrid, List, Monitor, Pencil, Plus,
+  RefreshCw, Search, Tag, Trash2, Upload, X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -42,6 +43,7 @@ function FilesInner() {
   const [tags, setTags] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [searchQ, setSearchQ] = useState("");
   const [searchMode, setSearchMode] = useState(false);
   const [menu, setMenu] = useState<string | null>(null);
@@ -54,6 +56,9 @@ function FilesInner() {
   const [deleting, setDeleting] = useState<RemoteFileEntry | null>(null);
   const [uploading, setUploading] = useState(false);
   const uploadRef = useState<HTMLInputElement | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [treeRoots, setTreeRoots] = useState<Record<string, Root[]>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const picker = useMemo(
     () => pickers.find((p) => p.id === selected),
@@ -209,6 +214,21 @@ function FilesInner() {
     } finally { setUploading(false); }
   }
 
+  async function convert(e: RemoteFileEntry) {
+    if (!picker) return;
+    setError(null); setNotice(null);
+    try {
+      const r = await apiFetch<{ name: string }>(
+        `/api/v1/devices/${picker.deviceId}/convert`, token!, {
+          method: "POST", body: JSON.stringify({ path: e.path ?? e.rel_path }),
+        });
+      setNotice(`Converted — ${r.name} created next to the original.`);
+      browse(picker.deviceId, path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "conversion failed");
+    }
+  }
+
   async function download(e: RemoteFileEntry) {
     if (!picker || !token) return;
     const base = process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000";
@@ -257,10 +277,73 @@ function FilesInner() {
     setTags((t) => ({ ...t, [p]: (t[p] ?? []).filter((x) => x !== tag) }));
   }
 
+  function entryMenu(e: RemoteFileEntry, p: string, dir: boolean) {
+    return (
+      <div className="card absolute right-0 top-full z-20 mt-1 w-40 p-1.5">
+        {!dir && (
+          <button className="menu-item" onClick={() => { download(e); setMenu(null); }}>
+            <Download size={13} /> Download
+          </button>
+        )}
+        {!dir && /\.(docx?|odt|pptx?|xlsx?|txt|rtf)$/i.test(e.name) && (
+          <button className="menu-item" onClick={() => { convert(e); setMenu(null); }}>
+            <FileText size={13} /> Convert to PDF
+          </button>
+        )}
+        <button className="menu-item" onClick={() => { setTagEdit(e); setMenu(null); }}>
+          <Tag size={13} /> Add tag
+        </button>
+        {canWrite && (
+          <>
+            <button className="menu-item" onClick={() => { setRenaming(e); setRenameTo(e.name); setMenu(null); }}>
+              <Pencil size={13} /> Rename
+            </button>
+            <button className="menu-item text-[var(--color-danger)]" onClick={() => { setDeleting(e); setMenu(null); }}>
+              <Trash2 size={13} /> Delete
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   const currentRoot = roots.find((r) => path.toLowerCase().startsWith(r.path.toLowerCase()));
   const canWrite = !picker?.shared
     ? currentRoot?.access === "readwrite"
     : (picker.shared.permissions ?? 0) & 4;
+
+  // ── device tree (left pane) ──
+
+  async function toggleDevice(p: Picker) {
+    setExpanded((e) => ({ ...e, [p.id]: !e[p.id] }));
+    if (expanded[p.id] || p.shared || treeRoots[p.deviceId] !== undefined) return;
+    const r = await filesFetch<{ roots?: Root[] }>(
+      `/api/v1/devices/${p.deviceId}/browse?path=`, token!,
+    ).catch(() => null);
+    setTreeRoots((t) => ({
+      ...t,
+      [p.deviceId]: (r?.roots ?? []).map((x) => ({ ...x, label: x.label || basename(x.path) })),
+    }));
+  }
+
+  function chooseFolder(p: Picker, r: Root) {
+    if (p.id !== selected) setSelected(p.id);
+    setEntries([]); setRoots([]); setSearchMode(false);
+    browse(p.deviceId, r.path);
+  }
+
+  // group colleague shares by their owning device for the tree
+  const sharedGroups = useMemo(() => {
+    const g = new Map<string, { name: string; items: Picker[] }>();
+    for (const p of pickers.filter((x) => x.shared)) {
+      const cur = g.get(p.deviceId) ?? {
+        name: p.shared!.device_name, items: [],
+      };
+      cur.items.push(p);
+      g.set(p.deviceId, cur);
+    }
+    return [...g.values()];
+  }, [pickers]);
 
   return (
     <div>
@@ -326,6 +409,16 @@ function FilesInner() {
             placeholder={`Search on ${picker?.label ?? "device"}…`}
             value={searchQ} onChange={(e) => setSearchQ(e.target.value)} />
         </form>
+        <div className="flex gap-0.5 rounded-lg bg-[var(--color-surface-2)] p-0.5">
+          <button className={`rounded-md p-1.5 ${viewMode === "grid" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-text-dim)]"}`}
+            title="Grid view" onClick={() => setViewMode("grid")}>
+            <LayoutGrid size={14} />
+          </button>
+          <button className={`rounded-md p-1.5 ${viewMode === "list" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-text-dim)]"}`}
+            title="List view" onClick={() => setViewMode("list")}>
+            <List size={14} />
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -333,28 +426,85 @@ function FilesInner() {
           <CloudOff size={15} /> {error}
         </div>
       )}
+      {notice && (
+        <div className="card mb-4 flex items-center gap-2 px-4 py-3 text-sm text-[var(--color-online)]">
+          <Check size={15} /> {notice}
+        </div>
+      )}
 
-      {/* two-pane: folder tree + entries */}
+      {/* two-pane: device tree + entries */}
       <div className="grid gap-4 lg:grid-cols-[230px_1fr]">
         <div className="card hidden self-start p-2 lg:block">
-          <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">
-            Shared folders
-          </div>
-          {roots.map((r) => (
-            <button key={r.path}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm ${
-                path.toLowerCase().startsWith(r.path.toLowerCase())
-                  ? "bg-[rgba(139,92,246,0.15)] text-[var(--color-accent)]"
-                  : "hover:bg-[var(--color-surface-2)]"
-              }`}
-              onClick={() => picker && browse(picker.deviceId, r.path)}>
-              <HardDrive size={14} className="shrink-0" />
-              <span className="truncate">{r.label}</span>
-            </button>
+          {pickers.filter((p) => !p.shared).map((p) => (
+            <div key={p.id}>
+              <button
+                className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-[var(--color-surface-2)]"
+                onClick={() => toggleDevice(p)}>
+                <ChevronRight size={12}
+                  className={`shrink-0 text-[var(--color-text-dim)] transition-transform ${expanded[p.id] ? "rotate-90" : ""}`} />
+                <Monitor size={14} className="shrink-0 text-[var(--color-text-dim)]" />
+                <span className="min-w-0 flex-1 truncate font-medium">{p.label}</span>
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${p.status === "online" ? "bg-[var(--color-online)]" : "bg-[var(--color-surface-3)]"}`} />
+              </button>
+              {expanded[p.id] && (
+                <div className="mb-1 ml-5 space-y-0.5 border-l border-[var(--color-border)] pl-2">
+                  {(treeRoots[p.deviceId] ?? []).map((r) => (
+                    <button key={r.path}
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                        selected === p.id && path.toLowerCase().startsWith(r.path.toLowerCase())
+                          ? "bg-[rgba(139,92,246,0.15)] text-[var(--color-accent)]"
+                          : "text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                      }`}
+                      onClick={() => chooseFolder(p, r)}>
+                      <Folder size={13} className="shrink-0" />
+                      <span className="truncate">{r.label}</span>
+                    </button>
+                  ))}
+                  {treeRoots[p.deviceId] === undefined && (
+                    <div className="px-2 py-1.5 text-xs text-[var(--color-text-dim)]"><Spinner size={11} /></div>
+                  )}
+                  {(treeRoots[p.deviceId] ?? []).length === 0 && treeRoots[p.deviceId] !== undefined && (
+                    <div className="px-2 py-1.5 text-[11px] text-[var(--color-text-dim)]">
+                      {p.status === "online" ? "No shared folders" : "Offline"}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           ))}
-          {roots.length === 0 && (
+
+          {sharedGroups.length > 0 && (
+            <div className="mt-3 border-t border-[var(--color-border)] pt-2">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">
+                Colleagues
+              </div>
+              {sharedGroups.map((g) => (
+                <div key={g.name}>
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 text-sm">
+                    <Monitor size={14} className="shrink-0 text-[var(--color-text-dim)]" />
+                    <span className="truncate font-medium">{g.name}</span>
+                  </div>
+                  <div className="mb-1 ml-5 space-y-0.5 border-l border-[var(--color-border)] pl-2">
+                    {g.items.map((p) => (
+                      <button key={p.id}
+                        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
+                          selected === p.id
+                            ? "bg-[rgba(139,92,246,0.15)] text-[var(--color-accent)]"
+                            : "text-[var(--color-text-dim)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                        }`}
+                        onClick={() => select(p.id)}>
+                        <Folder size={13} className="shrink-0" />
+                        <span className="truncate">{p.shared!.label || basename(p.shared!.root_path)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {pickers.length === 0 && (
             <div className="px-2.5 py-3 text-xs text-[var(--color-text-dim)]">
-              No shared folders — add them under Devices → Folders.
+              No computers — pair one first.
             </div>
           )}
         </div>
@@ -366,6 +516,31 @@ function FilesInner() {
           <div className="p-10 text-center text-sm text-[var(--color-text-dim)]">
             {searchMode ? "No matches." : path ? "Empty folder." :
               picker?.shared ? "" : "No shared folders yet — add one under Devices → Folders."}
+          </div>
+        ) : viewMode === "grid" ? (
+          <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 xl:grid-cols-4">
+            {entries.map((e) => {
+              const p = e.path ?? e.rel_path;
+              const dir = !!e.is_dir;
+              return (
+                <div key={p}
+                  className="group relative rounded-lg border border-[var(--color-border)] p-3 transition-colors hover:border-[var(--color-accent)]">
+                  <div className="relative flex justify-end">
+                    <button className="btn btn-ghost absolute -right-1 -top-1 !p-1 opacity-0 transition-opacity group-hover:opacity-100"
+                      onClick={() => setMenu(menu === p ? null : p)}>···</button>
+                    {menu === p && entryMenu(e, p, dir)}
+                  </div>
+                  <button className="flex w-full flex-col items-center gap-2"
+                    onClick={() => dir ? open(e) : download(e)}>
+                    <FileIcon name={e.name} isDir={dir} size={30} />
+                    <span className="w-full truncate text-center text-xs font-medium">{e.name}</span>
+                    <span className="text-[10px] text-[var(--color-text-dim)]">
+                      {dir ? "folder" : formatBytes(e.size ?? 0)}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <table className="w-full text-sm">
@@ -416,28 +591,7 @@ function FilesInner() {
                       <div className="relative flex justify-end">
                         <button className="btn btn-ghost !p-1.5 opacity-0 transition-opacity group-hover:opacity-100"
                           onClick={() => setMenu(menu === p ? null : p)}>···</button>
-                        {menu === p && (
-                          <div className="card absolute right-0 top-full z-20 mt-1 w-40 p-1.5">
-                            {!dir && (
-                              <button className="menu-item" onClick={() => { download(e); setMenu(null); }}>
-                                <Download size={13} /> Download
-                              </button>
-                            )}
-                            <button className="menu-item" onClick={() => { setTagEdit(e); setMenu(null); }}>
-                              <Tag size={13} /> Add tag
-                            </button>
-                            {canWrite && (
-                              <>
-                                <button className="menu-item" onClick={() => { setRenaming(e); setRenameTo(e.name); setMenu(null); }}>
-                                  <Pencil size={13} /> Rename
-                                </button>
-                                <button className="menu-item text-[var(--color-danger)]" onClick={() => { setDeleting(e); setMenu(null); }}>
-                                  <Trash2 size={13} /> Delete
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        )}
+                        {menu === p && entryMenu(e, p, dir)}
                       </div>
                     </td>
                   </tr>

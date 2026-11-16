@@ -15,6 +15,36 @@ import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
 
 const AGENT_DOWNLOAD_URL = process.env.NEXT_PUBLIC_AGENT_DOWNLOAD_URL ?? "";
 
+interface DeviceStats {
+  platform: string;
+  agent_version: string;
+  libreoffice: boolean;
+  drives: { drive: string; total: number; free: number }[];
+}
+
+function DriveStats({ deviceId, token }: { deviceId: string; token: string }) {
+  const [stats, setStats] = useState<DeviceStats | null>(null);
+  useEffect(() => {
+    apiFetch<DeviceStats>(`/api/v1/devices/${deviceId}/stats`, token)
+      .then(setStats).catch(() => {});
+  }, [deviceId, token]);
+  if (!stats || stats.drives.length === 0) return null;
+  const d = stats.drives[0];
+  const usedPct = Math.round(((d.total - d.free) / d.total) * 100);
+  return (
+    <div className="mt-3">
+      <div className="flex justify-between text-[11px] text-[var(--color-text-dim)]">
+        <span>Storage {d.drive}</span>
+        <span>{formatBytes(d.free)} free of {formatBytes(d.total)}</span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+        <div className={`h-full rounded-full ${usedPct > 90 ? "bg-[var(--color-danger)]" : "bg-[var(--color-primary)]"}`}
+          style={{ width: `${usedPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState<string | null>(null);
@@ -352,9 +382,10 @@ export default function DevicesPage() {
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--color-text-dim)]">
-                <div>Agent {d.agent_version ?? "â€”"}</div>
+                <div>{d.platform} · Agent {d.agent_version ?? "â€”"}</div>
                 <div>Added {formatDate(d.created_at)}</div>
               </div>
+              {d.status === "online" && <DriveStats deviceId={d.id} token={token!} />}
 
               <div className="mt-4 flex gap-2">
                 <button className="btn btn-ghost flex-1 justify-center"

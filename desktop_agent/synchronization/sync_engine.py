@@ -82,6 +82,8 @@ class SyncRuntime:
     drain_task: asyncio.Task | None = None
     suppress: dict[str, float] = field(default_factory=dict)  # rel_path -> until
     snapshot_replies: int = 0   # reply at most once per session → converge
+    applied_ops: int = 0        # peer ops applied locally (progress metric)
+    emitted_ops: int = 0        # local ops sent to peer
 
 
 class SyncEngine:
@@ -232,6 +234,7 @@ class SyncEngine:
         await self._send_event(rt, ev)
 
     async def _send_event(self, rt: SyncRuntime, ev: SyncEvent) -> None:
+        rt.emitted_ops += 1
         self._journal(rt, ev.op_id, ev.op.value, ev.rel_path)
         await self.ctx.send(
             Envelope(type=MessageType.SYNC_EVENT, payload=ev.model_dump()).model_dump_json()
@@ -247,6 +250,7 @@ class SyncEngine:
         if self._journaled(rt, ev.op_id):
             return  # our own op echoed back, or already applied
         self._journal(rt, ev.op_id, ev.op.value, ev.rel_path)
+        rt.applied_ops += 1
 
         if ev.op is SyncOpType.SNAPSHOT:
             # our startup snapshot may have raced past the peer's start —
@@ -489,7 +493,11 @@ async def op_stop_sync(ctx: "AgentContext", args: dict) -> dict:
 async def op_get_device_status(ctx: "AgentContext", args: dict) -> dict:
     return {
         "sync_sessions": {
-            sid: {"root": str(rt.root), "paused": rt.paused, "mode": rt.mode}
+            sid: {
+                "root": str(rt.root), "paused": rt.paused, "mode": rt.mode,
+                "applied_ops": rt.applied_ops, "emitted_ops": rt.emitted_ops,
+                "pending_ops": rt.events.qsize(),
+            }
             for sid, rt in ctx.sync.sessions.items()
         }
     }

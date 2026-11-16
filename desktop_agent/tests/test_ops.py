@@ -225,3 +225,26 @@ async def test_send_file_collision_renames(rw_ctx, sample_tree):
 
     r1 = await push("u1")
     assert "README (1).md" in r1["written"]   # README.md already exists
+
+
+async def test_sys_info(rw_ctx):
+    res = await HANDLERS['sys_info'](rw_ctx, {})
+    assert 'platform' in res and 'libreoffice' in res
+    assert any(d['drive'] for d in res['drives'])
+
+
+async def test_convert_denies_when_no_soffice(rw_ctx, sample_tree, monkeypatch):
+    monkeypatch.setattr('file_operations.ops._soffice', lambda: None)
+    try:
+        await HANDLERS['convert_document'](rw_ctx, {'path': str(sample_tree / 'README.md')})
+        assert False
+    except OpDenied as e:
+        assert 'LibreOffice' in str(e)
+
+
+async def test_convert_requires_write_access(ro_ctx, sample_tree):
+    try:
+        await HANDLERS['convert_document'](ro_ctx, {'path': str(sample_tree / 'README.md')})
+        assert False
+    except OpDenied:
+        pass

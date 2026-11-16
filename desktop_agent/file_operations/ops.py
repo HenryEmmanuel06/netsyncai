@@ -13,6 +13,7 @@ import base64
 import hashlib
 import logging
 import os
+import platform
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
@@ -280,6 +281,70 @@ async def op_send_file(ctx: AgentContext, args: dict) -> dict:
     return {"written": str(final), "size": final.stat().st_size, "sha256": h.hexdigest()}
 
 
+def _soffice() -> str | None:
+    p = shutil.which("soffice") or shutil.which("soffice.exe")
+    if p:
+        return p
+    for cand in (
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+    ):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+async def op_sys_info(ctx: AgentContext, args: dict) -> dict:
+    """Local hardware/software facts for the dashboard — disk free per
+    indexed drive, agent version, whether LibreOffice is available."""
+    from agent_config import AGENT_VERSION
+    drives: dict[str, dict] = {}
+    for row in ctx.conn.execute(
+            "SELECT path FROM indexed_folders WHERE access != 'none'").fetchall():
+        drive = (Path(row["path"]).anchor or row["path"])[:3] or row["path"]
+        try:
+            du = shutil.disk_usage(drive if drive else "/")
+        except OSError:
+            continue
+        drives[drive] = {"drive": drive, "total": du.total, "free": du.free}
+    return {
+        "platform": platform.system(),
+        "agent_version": AGENT_VERSION,
+        "drives": sorted(drives.values(), key=lambda d: d["drive"]),
+        "libreoffice": _soffice() is not None,
+    }
+
+
+async def op_convert_document(ctx: AgentContext, args: dict) -> dict:
+    """Convert a document to PDF via LibreOffice headless (agent-side —
+    the file never leaves the machine)."""
+    src = ctx.check_path(args["path"], write=True)
+    if not src.is_file():
+        raise OpDenied("not a file")
+    fmt = args.get("to", "pdf").lower()
+    if fmt != "pdf":
+        raise OpDenied("only pdf conversion is supported")
+    exe = _soffice()
+    if not exe:
+        raise OpDenied("LibreOffice is not installed on this computer")
+    proc = await asyncio.create_subprocess_exec(
+        exe, "--headless", "--convert-to", "pdf", "--outdir",
+        str(src.parent), str(src),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), 120)
+    except TimeoutError:
+        proc.kill()
+        raise OpDenied("conversion timed out")
+    target = src.with_suffix(".pdf")
+    if proc.returncode != 0 or not target.exists():
+        detail = (err or out).decode(errors="replace").strip()[:200]
+        raise OpDenied(f"conversion failed: {detail or 'unknown error'}")
+    return {"created": str(target), "name": target.name,
+            "size": target.stat().st_size}
+
+
 def _update_index_path(ctx: AgentContext, old: Path, new: Path) -> None:
     ctx.conn.execute(
         "UPDATE files SET rel_path = ?, name = ? WHERE name = ? AND deleted = 0",
@@ -298,4 +363,6 @@ HANDLERS: dict[str, Callable[[AgentContext, dict], Awaitable[dict]]] = {
     "delete_file": op_delete_file,
     "create_folder": op_create_folder,
     "send_file": op_send_file,
+    "sys_info": op_sys_info,
+    "convert_document": op_convert_document,
 }
