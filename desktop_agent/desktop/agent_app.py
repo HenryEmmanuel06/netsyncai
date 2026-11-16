@@ -147,6 +147,8 @@ class AgentApp:
 
         if self._paired():
             self.start_agent()
+            if not self.background and not self.initial_message:
+                self.show_status()
         else:
             self.set_state("unpaired")
             if not self.background and not self.initial_message:
@@ -275,7 +277,7 @@ class AgentApp:
             if self.state in ("unpaired", "rejected"):
                 self.show_welcome()
             else:
-                self.notify(f"NetSync AI is running — {self.status_line()}")
+                self.show_status()
 
     # ── windows ───────────────────────────────────────────────────────────
 
@@ -301,6 +303,20 @@ class AgentApp:
 
     def open_logs(self) -> None:
         os.startfile(self.data_dir / "logs")  # type: ignore[attr-defined]
+
+    def show_status(self) -> None:
+        """Reassure a manual (double-click) launcher that the app is alive —
+        without a window, a paired agent looks like 'nothing happened'."""
+        from desktop.windows import InfoWindow
+        self._close("status")
+        self.windows["status"] = InfoWindow(
+            self.root, self.window_icon,
+            f"NetSync AI — {STATUS_TEXT.get(self.state, self.state)}",
+            f"This computer is connected as “{self.device_name or '—'}” and "
+            "keeps running in the background (system tray icon). Manage shared "
+            "folders and people from the dashboard.",
+            action=("Open dashboard", lambda: self.open_dashboard("")),
+        )
 
     # ── pairing ───────────────────────────────────────────────────────────
 
@@ -430,4 +446,19 @@ def run_app(data_dir: Path, argv: list[str]) -> int:
             register(Path(sys.executable))  # repair paths after updates
         except OSError:
             log.warning("could not refresh Windows integration")
-    return AgentApp(data_dir, message, background).run()
+    try:
+        return AgentApp(data_dir, message, background).run()
+    except Exception:
+        log.exception("fatal app error")
+        # a windowed exe dies silently otherwise — show the user something
+        try:
+            from tkinter import messagebox
+            root = tk.Tk(); root.withdraw()
+            log_dir = data_dir / "logs"
+            messagebox.showerror(
+                "NetSync AI",
+                f"NetSync AI could not start.\n\nDetails were written to:\n{log_dir}",
+            )
+        except Exception:
+            pass
+        return 1
