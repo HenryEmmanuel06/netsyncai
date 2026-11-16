@@ -15,7 +15,9 @@ from app.schemas.devices import (
     DeviceResponse,
     DeviceStatusUpdate,
 )
+from app.networking.connections import manager
 from app.security.jwt import AuthContext
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -70,6 +72,10 @@ async def revoke_device(
     store: DeviceStore = Depends(get_device_store),
 ) -> DeviceResponse:
     try:
-        return await store.revoke(auth.user_id, device_id)
+        device = await store.revoke(auth.user_id, device_id)
     except DeviceNotFound:
         raise http_404("device not found")
+    await manager.disconnect(device_id)
+    await log_activity(store, auth.user_id, "device.removed",
+                       device_id=device_id, target=device.name)
+    return device

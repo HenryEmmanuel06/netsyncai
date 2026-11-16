@@ -20,6 +20,7 @@ from app.networking.connections import manager
 from app.networking import transfers
 from app.orchestration import dispatcher
 from app.schemas.devices import DeviceResponse
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
 from app.protocol import (
     AgentHello,
@@ -85,6 +86,8 @@ async def agent_socket(
         manager.register(device.id, ws)
         await ws.send_text(_env(MessageType.PONG, {"session": "ready"}))
         log.info("device %s connected (%s)", device.id, device.name)
+        await log_activity(store, device.owner_id, "device.online",
+                           device_id=device.id, target=device.name)
 
         # re-issue active sync sessions — agents drop watchers on disconnect
         for s in await store.get_active_syncs_for_device(device.id):
@@ -143,3 +146,5 @@ async def agent_socket(
             manager.unregister(device.id)
             await store.agent_disconnected(device.id)
             log.info("device %s disconnected", device.id)
+            await log_activity(store, device.owner_id, "device.offline",
+                               device_id=device.id, target=device.name)

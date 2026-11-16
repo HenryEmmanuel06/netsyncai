@@ -53,6 +53,10 @@ class AgentContext:
         self.conn = conn
         self.send = send
         self.incoming: dict[str, IncomingTransfer] = {}
+        self.indexing: set[int] = set()          # folder ids being indexed
+        self.background: set[asyncio.Task] = set()
+        db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
+        self.data_dir = Path(db_file).parent if db_file else None
 
     def roots_for(self, write: bool) -> AllowedRoots:
         """Allowed roots = registered folders with sufficient access."""
@@ -108,6 +112,7 @@ async def op_browse_folder(ctx: AgentContext, args: dict) -> dict:
             continue
         entries.append({
             "name": child.name,
+            "path": str(child),
             "rel_path": str(child),
             "is_dir": child.is_dir(),
             "ext": child.suffix.lower() if child.is_file() else None,

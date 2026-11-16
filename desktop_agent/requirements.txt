@@ -2,3 +2,5 @@ watchdog>=4.0
 httpx>=0.27
 websockets>=12.0
 pydantic>=2.7
+pystray==0.19.5   # tray icon (app mode)
+pillow==13.0.0    # tray icon image

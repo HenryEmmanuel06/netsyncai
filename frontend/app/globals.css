@@ -1,14 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0f0f13;
-  --color-surface: #16161d;
-  --color-surface-2: #1d1d27;
-  --color-border: #2a2a38;
+  --color-bg: #0c0c12;
+  --color-surface: #14141c;
+  --color-surface-2: #1b1b26;
+  --color-surface-3: #23232f;
+  --color-border: #2a2a3a;
   --color-primary: #8b5cf6;
   --color-primary-hover: #7c4dff;
-  --color-text: #e7e7ee;
-  --color-text-dim: #9b9bab;
+  --color-accent: #a78bfa;
+  --color-text: #ececf3;
+  --color-text-dim: #9a9aad;
+  --color-online: #34d399;
+  --color-offline: #71717f;
+  --color-warn: #fbbf24;
+  --color-danger: #f87171;
 }
 
 html, body {
@@ -16,8 +22,113 @@ html, body {
   color: var(--color-text);
 }
 
+body {
+  background-image:
+    radial-gradient(ellipse 60% 50% at 15% -10%, rgba(139, 92, 246, 0.10), transparent),
+    radial-gradient(ellipse 50% 40% at 100% 0%, rgba(99, 60, 210, 0.08), transparent);
+  background-attachment: fixed;
+}
+
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
+  border-radius: 0.9rem;
 }
+
+.card-hover {
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.card-hover:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 0.6rem;
+  padding: 0.55rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn-primary {
+  background: var(--color-primary);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-hover); }
+.btn-ghost {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.btn-ghost:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.btn-danger {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: var(--color-danger);
+}
+.btn-danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.2); }
+
+.input {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  outline: none;
+}
+.input:focus { border-color: var(--color-primary); }
+.input::placeholder { color: var(--color-text-dim); }
+
+select.input option { background: var(--color-surface); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.badge-green { background: rgba(52, 211, 153, 0.14); color: var(--color-online); }
+.badge-gray  { background: rgba(113, 113, 127, 0.2); color: var(--color-text-dim); }
+.badge-amber { background: rgba(251, 191, 36, 0.14); color: var(--color-warn); }
+.badge-red   { background: rgba(248, 113, 113, 0.14); color: var(--color-danger); }
+.badge-purple{ background: rgba(139, 92, 246, 0.16); color: var(--color-accent); }
+.badge-blue  { background: rgba(96, 165, 250, 0.14); color: #7db4f8; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: var(--color-accent);
+}
+
+::placeholder { color: var(--color-text-dim); }
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--color-surface-3); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.fade-up { animation: fade-up 0.25s ease both; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot { animation: pulse-dot 1.6s ease infinite; }

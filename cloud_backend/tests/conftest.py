@@ -53,7 +53,8 @@ def _clean_store():
 
     store = deps._memory_store
     for attr in ("_devices", "_sessions", "_pairing", "_credentials",
-                 "_sync", "_shares", "_grants"):
+                 "_sync", "_shares", "_grants", "_activity",
+                 "_tags", "_prefs"):
         if hasattr(store, attr):
             getattr(store, attr).clear()
     yield

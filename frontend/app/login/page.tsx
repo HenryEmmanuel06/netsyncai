@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Boxes } from "lucide-react";
 import { getSupabaseBrowser, supabaseConfigured } from "@/lib/supabase";
+import { Spinner } from "@/components/ui";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -41,15 +44,21 @@ export default function LoginPage() {
     } else if (mode === "signup") {
       setMessage("Check your email to verify your account, then sign in.");
     } else {
-      router.push("/assistant");
+      router.push("/dashboard");
     }
   }
 
   return (
     <main className="flex min-h-screen items-center justify-center p-8">
-      <form onSubmit={submit} className="card w-full max-w-sm space-y-4 p-6">
-        <h1 className="text-xl font-semibold">
-          {mode === "signin" ? "Sign in" : "Create account"}
+      <form onSubmit={submit} className="card w-full max-w-sm space-y-4 p-7">
+        <Link href="/" className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#5f32d6]">
+            <Boxes size={18} className="text-white" />
+          </span>
+          <span className="font-semibold">NetSync AI</span>
+        </Link>
+        <h1 className="pt-2 text-xl font-semibold">
+          {mode === "signin" ? "Welcome back" : "Create your account"}
         </h1>
         <input
           type="email"
@@ -57,7 +66,7 @@ export default function LoginPage() {
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 outline-none focus:border-[var(--color-primary)]"
+          className="input w-full"
         />
         <input
           type="password"
@@ -66,17 +75,14 @@ export default function LoginPage() {
           placeholder="Password (min 8 chars)"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 outline-none focus:border-[var(--color-primary)]"
+          className="input w-full"
         />
         {message && (
           <p className="text-sm text-[var(--color-text-dim)]">{message}</p>
         )}
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-lg bg-[var(--color-primary)] py-2 font-medium text-white disabled:opacity-50"
-        >
-          {busy ? "…" : mode === "signin" ? "Sign in" : "Sign up"}
+        <button type="submit" disabled={busy}
+          className="btn btn-primary w-full justify-center !py-2.5">
+          {busy ? <Spinner size={15} /> : mode === "signin" ? "Sign in" : "Sign up"}
         </button>
         <button
           type="button"

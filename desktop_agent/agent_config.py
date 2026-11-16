@@ -19,6 +19,8 @@ import os
 import sys
 from pathlib import Path
 
+AGENT_VERSION = "0.2.0"
+
 
 def _config_path() -> Path | None:
     if getattr(sys, "frozen", False):
@@ -34,7 +36,8 @@ def bundled_config() -> dict:
     if p is None:
         return {}
     try:
-        return json.loads(p.read_text())
+        # utf-8-sig: tolerate the BOM some Windows editors/shells write
+        return json.loads(p.read_text("utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -43,6 +46,12 @@ def default_coordinator() -> str:
     if url := os.environ.get("NETSYNC_COORDINATOR_URL"):
         return url
     return bundled_config().get("coordinator_url", "http://localhost:8000")
+
+
+def dashboard_url() -> str:
+    if url := os.environ.get("NETSYNC_DASHBOARD_URL"):
+        return url
+    return bundled_config().get("dashboard_url", "http://localhost:3000")
 
 
 def default_data_dir() -> Path | None:

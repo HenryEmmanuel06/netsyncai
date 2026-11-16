@@ -113,7 +113,8 @@ class SupabaseDeviceStore:
     # ── pairing ──
 
     async def create_pairing(
-        self, owner_id: str, device_name: str, ttl_seconds: int
+        self, owner_id: str, device_name: str, ttl_seconds: int,
+        owner_email: str | None = None,
     ) -> tuple[str, datetime]:
         code = _new_code()
         expires = _now() + timedelta(seconds=ttl_seconds)
@@ -169,6 +170,103 @@ class SupabaseDeviceStore:
         )
         r.raise_for_status()
         return DeviceResponse(**r.json()[0]), credential
+
+    async def preview_pairing(self, code: str) -> dict:
+        r = await self._client.get(
+            "/device_pairing_requests",
+            params={"code_hash": f"eq.{_hash(code.strip().upper())}",
+                    "select": "device_name,expires_at,used_at,profiles(email)"},
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            raise PairingError("invalid pairing code")
+        rec = rows[0]
+        if rec["used_at"]:
+            raise PairingError("pairing code already used")
+        if datetime.fromisoformat(rec["expires_at"]) <= _now():
+            raise PairingError("pairing code expired")
+        return {"device_name": rec["device_name"],
+                "owner_email": (rec.get("profiles") or {}).get("email"),
+                "expires_at": rec["expires_at"]}
+
+    async def record_activity(
+        self, actor_id: str | None, action: str, *, device_id: str | None = None,
+        target: str | None = None, metadata: dict | None = None,
+    ) -> None:
+        r = await self._client.post(
+            "/activity_logs",
+            headers={"Prefer": "return=minimal"},
+            json={"actor_id": actor_id, "device_id": device_id, "action": action,
+                  "target": target, "metadata": metadata or {}},
+        )
+        r.raise_for_status()
+
+    async def list_activity(self, actor_id: str, limit: int = 50) -> list[dict]:
+        r = await self._client.get(
+            "/activity_logs",
+            params={"actor_id": f"eq.{actor_id}", "order": "created_at.desc",
+                    "limit": limit},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    # ── file tags + profile preferences ──
+
+    async def add_tag(
+        self, user_id: str, device_id: str, path: str, tag: str
+    ) -> dict:
+        r = await self._client.post(
+            "/file_tags",
+            headers={"Prefer": "return=representation,resolution=merge-duplicates"},
+            json={"user_id": user_id, "device_id": device_id,
+                  "path": path, "tag": tag},
+        )
+        r.raise_for_status()
+        return {"path": path, "tag": tag}
+
+    async def remove_tag(
+        self, user_id: str, device_id: str, path: str, tag: str
+    ) -> None:
+        r = await self._client.delete(
+            "/file_tags",
+            params={"user_id": f"eq.{user_id}", "device_id": f"eq.{device_id}",
+                    "path": f"eq.{path}", "tag": f"eq.{tag}"},
+        )
+        r.raise_for_status()
+
+    async def list_tags(self, user_id: str, device_id: str) -> dict[str, list[str]]:
+        r = await self._client.get(
+            "/file_tags",
+            params={"user_id": f"eq.{user_id}", "device_id": f"eq.{device_id}"},
+        )
+        r.raise_for_status()
+        out: dict[str, list[str]] = {}
+        for row in r.json():
+            out.setdefault(row["path"], []).append(row["tag"])
+        return {p: sorted(t) for p, t in out.items()}
+
+    async def get_preferences(self, user_id: str) -> dict:
+        r = await self._client.get(
+            "/profiles", params={"id": f"eq.{user_id}",
+                                 "select": "display_name,discoverable"},
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            return {"display_name": "", "discoverable": True}
+        return {"display_name": rows[0]["display_name"],
+                "discoverable": rows[0]["discoverable"]}
+
+    async def set_preferences(self, user_id: str, prefs: dict) -> dict:
+        allowed = {k: v for k, v in prefs.items()
+                   if k in ("display_name", "discoverable")}
+        if allowed:
+            r = await self._client.patch(
+                "/profiles", params={"id": f"eq.{user_id}"}, json=allowed,
+            )
+            r.raise_for_status()
+        return await self.get_preferences(user_id)
 
     async def verify_device_credential(self, device_id: str, credential: str) -> bool:
         r = await self._client.get(
@@ -258,32 +356,70 @@ class SupabaseDeviceStore:
         ]
         return session
 
+    def _sync_row(self, s: dict, participants: list[dict]) -> dict:
+        return {
+            **{k: v for k, v in s.items() if k != "sync_participants"},
+            "participants": [
+                {"device_id": p["device_id"], "root": p.get("root_path", "")}
+                for p in participants
+            ],
+        }
+
+    async def get_sync(self, session_id: str) -> dict:
+        r = await self._client.get(
+            "/sync_sessions",
+            params={"id": f"eq.{session_id}", "select": "*,sync_participants(*)"},
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            raise DeviceNotFound(session_id)
+        return self._sync_row(rows[0], rows[0].get("sync_participants", []))
+
     async def list_sync(self, owner_id: str) -> list[dict]:
+        # sessions I created + sessions involving a device I own
         r = await self._client.get(
             "/sync_sessions",
             params={"created_by": f"eq.{owner_id}", "select": "*,sync_participants(*)"},
         )
         r.raise_for_status()
-        return [
-            {**s, "participants": [
-                {"device_id": p["device_id"], "root": p.get("root_path", "")}
-                for p in s.pop("sync_participants", [])
-            ]}
-            for s in r.json()
-        ]
+        sessions = {s["id"]: self._sync_row(s, s.get("sync_participants", []))
+                    for s in r.json()}
 
-    async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict:
+        my_devices = await self.list_devices(owner_id)
+        my_ids = ",".join(d.id for d in my_devices) or "00000000-0000-0000-0000-000000000000"
+        r = await self._client.get(
+            "/sync_participants",
+            params={"device_id": f"in.({my_ids})",
+                    "select": "device_id,root_path,sync_sessions(*,sync_participants(*))"},
+        )
+        r.raise_for_status()
+        for row in r.json():
+            s = row.get("sync_sessions")
+            if s:
+                sessions.setdefault(
+                    s["id"], self._sync_row(s, s.get("sync_participants", []))
+                )
+        return list(sessions.values())
+
+    async def _can_control_sync(self, actor_id: str, session: dict) -> bool:
+        if session["created_by"] == actor_id:
+            return True
+        my_devices = {d.id for d in await self.list_devices(actor_id)}
+        return any(p["device_id"] in my_devices for p in session["participants"])
+
+    async def set_sync_state(self, actor_id: str, session_id: str, state: str) -> dict:
+        session = await self.get_sync(session_id)
+        if not await self._can_control_sync(actor_id, session):
+            raise DeviceNotFound(session_id)
         r = await self._client.patch(
             "/sync_sessions",
-            params={"id": f"eq.{session_id}", "created_by": f"eq.{owner_id}"},
+            params={"id": f"eq.{session_id}"},
             json={"state": state, "updated_at": _now().isoformat()},
         )
         r.raise_for_status()
-        if not r.json():
-            raise DeviceNotFound(session_id)
-        s = r.json()[0]
-        s["participants"] = await self.get_sync_participants(session_id)
-        return s
+        session["state"] = state
+        return session
 
     async def get_sync_participants(self, session_id: str) -> list[dict]:
         r = await self._client.get(
@@ -462,6 +598,7 @@ class SupabaseDeviceStore:
             "/profiles",
             params={
                 "or": f"(email.eq.{subject},handle.eq.{subject.lstrip('@')})",
+                "discoverable": "eq.true",  # opt-out hides email/handle lookup
                 "select": "id",
             },
         )

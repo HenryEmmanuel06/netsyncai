@@ -17,6 +17,12 @@ class PairingCreateResponse(BaseModel):
     expires_in_seconds: int
 
 
+class PairingPreviewResponse(BaseModel):
+    device_name: str
+    owner_email: str | None   # shown in the desktop confirmation window
+    expires_at: datetime
+
+
 class PairingRedeemRequest(BaseModel):
     code: str = Field(min_length=4, max_length=16)
     agent_version: str | None = Field(default=None, max_length=32)

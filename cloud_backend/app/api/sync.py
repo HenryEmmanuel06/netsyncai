@@ -10,9 +10,11 @@ from fastapi import APIRouter, Depends, status
 
 from app.api.deps import current_auth, get_device_store
 from app.errors import http_404
+from app.protocol import PERM_START_SYNC
 from app.orchestration.dispatcher import CommandFailed, DeviceOffline, dispatch
 from app.schemas.sync import SyncCreateRequest, SyncSessionResponse
 from app.security.jwt import AuthContext
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
 
 router = APIRouter(prefix="/sync", tags=["sync"])
@@ -24,10 +26,19 @@ async def create_sync(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    try:
-        await store.get_device(auth.user_id, req.a_device_id)
-        await store.get_device(auth.user_id, req.b_device_id)
-    except DeviceNotFound:
+    owned = 0
+    for device_id, path in ((req.a_device_id, req.a_path), (req.b_device_id, req.b_path)):
+        try:
+            await store.get_device(auth.user_id, device_id)
+            owned += 1
+            continue
+        except DeviceNotFound:
+            pass
+        # colleague's device: need a share covering the path with start_sync
+        bits = await store.effective_permissions(auth.user_id, device_id, path)
+        if not bits or not (bits & PERM_START_SYNC):
+            raise http_404("device not found")
+    if owned == 0:
         raise http_404("device not found")
 
     session = await store.create_sync(
@@ -53,6 +64,8 @@ async def create_sync(
             session["state"] = "error"
             session["error"] = str(getattr(exc, "error", exc))
             break
+    await log_activity(store, auth.user_id, "sync.started", target=session["name"],
+                       metadata={"state": session["state"], "mode": req.mode})
     return session
 
 
@@ -87,4 +100,5 @@ async def sync_action(
             await dispatch(p["device_id"], tool, {"session_id": session_id}, timeout=10)
         except (DeviceOffline, CommandFailed):
             pass  # agent applies on reconnect; state is authoritative
+    await log_activity(store, auth.user_id, f"sync.{action}", target=session["name"])
     return session

@@ -1,6 +1,7 @@
-# PyInstaller spec — Phase 6 will finalize (icon, tray deps, version info).
-# Build: pyinstaller agent.spec
+# PyInstaller spec — builds the single-file Windows app.
+# Build: pyinstaller --noconfirm agent.spec
 # Never embed secrets: the agent must contain no API keys or credentials.
+# The backend/dashboard URLs come from build_config.json (see docs/DEPLOYMENT.md).
 
 import pathlib
 
@@ -14,7 +15,14 @@ a = Analysis(
         ("database/schema.sql", "database"),
         ("build_config.json", "."),
     ],
-    hiddenimports=["watchdog.observers.winapi"],
+    hiddenimports=[
+        "watchdog.observers.winapi",
+        "pystray._win32",
+        "PIL.ImageTk",
+        "desktop.agent_app",
+        "file_operations.folders",
+        "synchronization.sync_engine",
+    ],
     hookspath=[],
     excludes=[],
     noarchive=False,
@@ -28,6 +36,6 @@ exe = EXE(
     a.binaries,
     a.datas,
     name="netsync-agent",
-    console=True,          # Phase 6: console=False + tray app entrypoint
-    icon=None,             # Phase 6: assets/netsync.ico
+    console=False,                      # windowed app; CLI reattaches to the parent terminal
+    icon="assets/netsync.ico",
 )

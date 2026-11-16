@@ -15,6 +15,7 @@ export interface Device {
 }
 
 export interface RemoteFileEntry {
+  path?: string;            // absolute — preferred for operations
   file_id?: string;
   rel_path: string;
   name: string;
@@ -58,6 +59,41 @@ export interface SharedFolder {
   created_at?: string;
   permissions?: number;
   grant_id?: string;
+}
+
+export interface LocalDirEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "drive" | "quick";
+  blocked?: string | null;
+}
+
+export interface SharedFolderInfo {
+  id: number;
+  path: string;
+  label: string;
+  access: string;
+  file_count: number;
+  total_size: number;
+  indexing?: boolean;
+  last_indexed_at?: string | null;
+}
+
+export interface GrantEntry {
+  id: string;
+  folder_id: string;
+  subject_user_id: string;
+  permissions_granted: number;
+  created_at?: string;
+}
+
+export interface ActivityItem {
+  id: number;
+  action: string;
+  target?: string | null;
+  device_id?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface TaskResult {

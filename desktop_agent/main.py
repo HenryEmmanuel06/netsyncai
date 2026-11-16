@@ -1,9 +1,13 @@
-"""NetSync AI desktop agent — CLI entrypoint.
+"""NetSync AI desktop agent — entrypoint.
 
-Commands:
+End users never use the CLI. Launching the exe with no subcommand (double-
+click, Windows startup, or a netsync:// link from the dashboard) starts the
+desktop app: tray icon, pairing window, background agent.
+
+Developer CLI subcommands:
   init    create local database + settings
   pair    redeem a pairing code -> device credential (one-time)
-  run     connect to the coordinator and stay resident (the daemon)
+  run     connect to the coordinator and stay resident (foreground)
   index   index a folder into local SQLite FTS5
   search  search the local index
   status  show agent state
@@ -18,13 +22,18 @@ import logging
 import sys
 from pathlib import Path
 
-from agent_config import default_coordinator
+from agent_config import AGENT_VERSION, default_coordinator
 from database.db import connect, default_data_dir, get_setting, set_setting
 from indexing.indexer import index_folder, register_folder, search_files
-from networking.coordinator import PairingFailed, redeem_pairing, run_forever
+from networking.coordinator import (
+    CredentialRejected,
+    PairingFailed,
+    redeem_pairing,
+    run_forever,
+)
 
 log = logging.getLogger("netsync-agent")
-AGENT_VERSION = "0.1.0"
+CLI_COMMANDS = {"init", "pair", "run", "index", "search", "status"}
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -111,6 +120,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         asyncio.run(
             run_forever(coordinator, device_id, credential, AGENT_VERSION, conn=conn)
         )
+    except CredentialRejected as exc:
+        print(f"this device is no longer accepted ({exc}) — pair again with "
+              "`pair <code> --force`", file=sys.stderr)
+        return 3
     except KeyboardInterrupt:
         log.info("shutting down")
     return 0
@@ -153,7 +166,31 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _attach_parent_console() -> None:
+    """The release exe is a windowed app (no console). When a developer runs
+    a CLI subcommand from a terminal, reattach to that terminal for output."""
+    if not getattr(sys, "frozen", False) or sys.stdout is not None:
+        return
+    import ctypes
+    if ctypes.windll.kernel32.AttachConsole(-1):  # ATTACH_PARENT_PROCESS
+        sys.stdout = open("CONOUT$", "w", buffering=1)
+        sys.stderr = open("CONOUT$", "w", buffering=1)
+
+
+def is_cli(argv: list[str]) -> bool:
+    return any(a in CLI_COMMANDS or a in ("-h", "--help") for a in argv)
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if not is_cli(argv):
+        pre = argparse.ArgumentParser(add_help=False)
+        pre.add_argument("--data-dir", type=Path, default=default_data_dir())
+        known, rest = pre.parse_known_args(argv)
+        from desktop.agent_app import run_app
+        return run_app(known.data_dir, rest)
+
+    _attach_parent_console()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = build_parser().parse_args(argv)
     return args.fn(args)

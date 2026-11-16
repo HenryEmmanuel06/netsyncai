@@ -184,6 +184,14 @@ TOOL_NAMES: frozenset[str] = frozenset({
     "rename_file", "move_file", "copy_file", "delete_file", "create_folder",
     "convert_document", "start_sync", "pause_sync", "resume_sync",
     "stop_sync", "get_device_status", "get_transfer_status",
+    # device-owner folder management (never exposed to the AI planner)
+    "list_local_dirs", "list_folders", "add_folder", "remove_folder",
+    "set_folder_access", "reindex_folder",
+})
+
+OWNER_ONLY_TOOLS: frozenset[str] = frozenset({
+    "list_local_dirs", "list_folders", "add_folder", "remove_folder",
+    "set_folder_access", "reindex_folder",
 })
 
 ToolName = Literal[
@@ -191,4 +199,6 @@ ToolName = Literal[
     "rename_file", "move_file", "copy_file", "delete_file", "create_folder",
     "convert_document", "start_sync", "pause_sync", "resume_sync",
     "stop_sync", "get_device_status", "get_transfer_status",
+    "list_local_dirs", "list_folders", "add_folder", "remove_folder",
+    "set_folder_access", "reindex_folder",
 ]

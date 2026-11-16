@@ -164,7 +164,9 @@ async def generate_plan(prompt: str, device_names: list[str]) -> Plan:
 def validate_steps(steps: list[PlanStep]) -> None:
     """Re-validate every step — the LLM output is untrusted input."""
     for i, s in enumerate(steps):
-        if s.tool not in TOOL_NAMES:
+        # the planner may only use tools with an explicit arg schema —
+        # folder sharing/management is never AI-controllable
+        if s.tool not in TOOL_NAMES or s.tool not in TOOL_ARG_SCHEMAS:
             raise PlanError(f"step {i}: unknown tool '{s.tool}'")
         allowed = TOOL_ARG_SCHEMAS.get(s.tool, {})
         required = REQUIRED_ARGS.get(s.tool, set())

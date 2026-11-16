@@ -104,6 +104,30 @@ class DeviceStore(Protocol):
         impl accepts uuid strings)."""
         ...
 
+    # ── pairing preview + activity ──
+    async def preview_pairing(self, code: str) -> dict:
+        """{device_name, owner_email, expires_at} without consuming the
+        code. Raises PairingError when invalid/used/expired."""
+        ...
+    async def record_activity(
+        self, actor_id: str | None, action: str, *, device_id: str | None = None,
+        target: str | None = None, metadata: dict | None = None,
+    ) -> None: ...
+    async def list_activity(self, actor_id: str, limit: int = 50) -> list[dict]: ...
+
+    # ── file tags + profile preferences ──
+    async def add_tag(
+        self, user_id: str, device_id: str, path: str, tag: str
+    ) -> dict: ...
+    async def remove_tag(
+        self, user_id: str, device_id: str, path: str, tag: str
+    ) -> None: ...
+    async def list_tags(self, user_id: str, device_id: str) -> dict[str, list[str]]:
+        """{path: [tag, ...]} — the caller maps them onto browsed entries."""
+        ...
+    async def get_preferences(self, user_id: str) -> dict: ...
+    async def set_preferences(self, user_id: str, prefs: dict) -> dict: ...
+
 
 class InMemoryDeviceStore:
     """Deterministic store for unit tests and local dev."""
@@ -168,21 +192,21 @@ class InMemoryDeviceStore:
     # ── pairing ──
 
     async def create_pairing(
-        self, owner_id: str, device_name: str, ttl_seconds: int
+        self, owner_id: str, device_name: str, ttl_seconds: int,
+        owner_email: str | None = None,
     ) -> tuple[str, datetime]:
         code = new_pairing_code()
         expires = _now() + timedelta(seconds=ttl_seconds)
         self._pairing[_hash_secret(code)] = {
             "owner_id": owner_id,
+            "owner_email": owner_email,
             "device_name": device_name,
             "expires_at": expires,
             "used": False,
         }
         return code, expires
 
-    async def redeem_pairing(
-        self, code: str, agent_version: str | None
-    ) -> tuple[DeviceResponse, str]:
+    def _valid_pairing(self, code: str) -> dict:
         record = self._pairing.get(_hash_secret(code.strip().upper()))
         if not record:
             raise PairingError("invalid pairing code")
@@ -190,6 +214,71 @@ class InMemoryDeviceStore:
             raise PairingError("pairing code already used")
         if record["expires_at"] <= _now():
             raise PairingError("pairing code expired")
+        return record
+
+    async def preview_pairing(self, code: str) -> dict:
+        r = self._valid_pairing(code)
+        return {"device_name": r["device_name"], "owner_email": r.get("owner_email"),
+                "expires_at": r["expires_at"]}
+
+    async def record_activity(
+        self, actor_id: str | None, action: str, *, device_id: str | None = None,
+        target: str | None = None, metadata: dict | None = None,
+    ) -> None:
+        if not hasattr(self, "_activity"):
+            self._activity = []
+        self._activity.append({
+            "id": len(self._activity) + 1, "actor_id": actor_id,
+            "device_id": device_id, "action": action, "target": target,
+            "metadata": metadata or {}, "created_at": _now(),
+        })
+        del self._activity[:-1000]  # bounded in dev
+
+    async def list_activity(self, actor_id: str, limit: int = 50) -> list[dict]:
+        rows = [a for a in getattr(self, "_activity", []) if a["actor_id"] == actor_id]
+        return list(reversed(rows))[:limit]
+
+    # ── file tags + preferences ──
+
+    async def add_tag(
+        self, user_id: str, device_id: str, path: str, tag: str
+    ) -> dict:
+        if not hasattr(self, "_tags"):
+            self._tags = {}
+        self._tags.setdefault((user_id, device_id, path), set()).add(tag)
+        return {"path": path, "tag": tag}
+
+    async def remove_tag(
+        self, user_id: str, device_id: str, path: str, tag: str
+    ) -> None:
+        tags = getattr(self, "_tags", {}).get((user_id, device_id, path))
+        if tags:
+            tags.discard(tag)
+
+    async def list_tags(self, user_id: str, device_id: str) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for (uid, did, path), tags in getattr(self, "_tags", {}).items():
+            if uid == user_id and did == device_id and tags:
+                out[path] = sorted(tags)
+        return out
+
+    async def get_preferences(self, user_id: str) -> dict:
+        if not hasattr(self, "_prefs"):
+            self._prefs = {}
+        return self._prefs.get(user_id, {"display_name": "", "discoverable": True})
+
+    async def set_preferences(self, user_id: str, prefs: dict) -> dict:
+        if not hasattr(self, "_prefs"):
+            self._prefs = {}
+        cur = self._prefs.get(user_id, {"display_name": "", "discoverable": True})
+        cur.update({k: v for k, v in prefs.items() if k in cur})
+        self._prefs[user_id] = cur
+        return cur
+
+    async def redeem_pairing(
+        self, code: str, agent_version: str | None
+    ) -> tuple[DeviceResponse, str]:
+        record = self._valid_pairing(code)
         record["used"] = True
 
         credential = new_device_credential()
@@ -262,16 +351,30 @@ class InMemoryDeviceStore:
         self._sync[session_id] = session
         return {k: v for k, v in session.items()}
 
+    async def get_sync(self, session_id: str) -> dict:
+        s = getattr(self, "_sync", {}).get(session_id)
+        if not s:
+            raise DeviceNotFound(session_id)
+        return s
+
     async def list_sync(self, owner_id: str) -> list[dict]:
+        # sessions I created OR that involve one of my devices
+        mine = {d["id"] for d in self._devices.values() if d["owner_id"] == owner_id}
         return [
             s for s in getattr(self, "_sync", {}).values()
             if s["created_by"] == owner_id
+            or any(p["device_id"] in mine for p in s["participants"])
         ]
 
-    async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict:
+    async def set_sync_state(self, actor_id: str, session_id: str, state: str) -> dict:
         s = getattr(self, "_sync", {}).get(session_id)
-        if not s or s["created_by"] != owner_id:
+        if not s:
             raise DeviceNotFound(session_id)
+        if s["created_by"] != actor_id and not any(
+            self._devices.get(p["device_id"], {}).get("owner_id") == actor_id
+            for p in s["participants"]
+        ):
+            raise DeviceNotFound(session_id)  # can't even see the session
         s["state"] = state
         return s
 

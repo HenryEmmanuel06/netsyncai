@@ -30,6 +30,16 @@ class ConnectionManager:
         await ws.send_text(text)
         return True
 
+    async def disconnect(self, device_id: str, code: int = 4403) -> None:
+        """Force-close a device's socket (e.g. after revocation). The agent's
+        reconnect is then rejected and it asks its user to pair again."""
+        ws = self._sockets.pop(device_id, None)
+        if ws is not None:
+            try:
+                await ws.close(code=code)
+            except Exception:
+                pass
+
     @property
     def connected_devices(self) -> list[str]:
         return list(self._sockets)

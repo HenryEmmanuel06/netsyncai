@@ -27,6 +27,19 @@ class PairingFailed(Exception):
     pass
 
 
+class CredentialRejected(Exception):
+    """The coordinator no longer accepts this device (revoked / unknown).
+    Retrying is pointless — the agent must be paired again."""
+
+
+def _notify(cb, state: str, detail: str | None = None) -> None:
+    if cb is not None:
+        try:
+            cb(state, detail)
+        except Exception:
+            log.exception("status callback failed")
+
+
 def ws_url_for(coordinator_url: str) -> str:
     return coordinator_url.replace("https://", "wss://").replace(
         "http://", "ws://"
@@ -148,10 +161,12 @@ async def run_session(
     agent_version: str,
     status: DeviceStatus = DeviceStatus.ONLINE,
     conn=None,
+    on_status=None,
 ) -> None:
     """One connection attempt: hello → message loop. Raises on failure;
     the caller (run_forever) owns retry/backoff policy."""
     url = ws_url_for(coordinator_url)
+    _notify(on_status, "connecting")
     async with websockets.connect(url, max_size=10 * 1024 * 1024) as ws:
         hello = Envelope(
             type=MessageType.AGENT_HELLO,
@@ -167,18 +182,25 @@ async def run_session(
         ack_raw = await asyncio.wait_for(ws.recv(), timeout=HELLO_ACK_TIMEOUT)
         ack = Envelope.model_validate_json(ack_raw)
         if ack.type is MessageType.ERROR:
+            if ack.payload.get("code") in ("auth_failed", "revoked"):
+                raise CredentialRejected(ack.payload.get("message", "rejected"))
             raise RuntimeError(f"handshake rejected: {ack.payload}")
         if ack.type is not MessageType.PONG:
             raise RuntimeError(f"unexpected handshake reply: {ack.type}")
         log.info("connected to %s", url)
+        _notify(on_status, "online")
 
         ctx = None
+        periodic = None
         if conn is not None:
+            from file_operations.folders import FOLDER_HANDLERS, periodic_reindex
             from file_operations.ops import AgentContext, HANDLERS
             from synchronization.sync_engine import SYNC_HANDLERS, SyncEngine
             ctx = AgentContext(conn, ws.send)
             ctx.sync = SyncEngine(ctx, device_id)
             HANDLERS.update(SYNC_HANDLERS)
+            HANDLERS.update(FOLDER_HANDLERS)
+            periodic = asyncio.create_task(periodic_reindex(ctx))
 
         hb = asyncio.create_task(_heartbeat(ws, device_id))
         tasks: set = set()
@@ -190,10 +212,14 @@ async def run_session(
                     log.exception("failed to handle message")
         finally:
             hb.cancel()
+            if periodic is not None:
+                periodic.cancel()
             for t in tasks:
                 t.cancel()
             if ctx is not None:
                 ctx.sync.stop_all()
+                for t in ctx.background:
+                    t.cancel()
 
 
 async def run_forever(
@@ -202,20 +228,27 @@ async def run_forever(
     credential: str,
     agent_version: str,
     conn=None,
+    on_status=None,
 ) -> None:
-    """Reconnecting outer loop — the agent's main resident coroutine."""
+    """Reconnecting outer loop — the agent's main resident coroutine.
+    Raises CredentialRejected when the device must be re-paired."""
     delays = backoff_delays()
     while True:
         try:
             await run_session(
                 coordinator_url, device_id, credential, agent_version,
-                conn=conn,
+                conn=conn, on_status=on_status,
             )
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, CredentialRejected) as exc:
+            if isinstance(exc, CredentialRejected):
+                log.error("coordinator rejected this device: %s", exc)
+                _notify(on_status, "rejected", str(exc))
             raise
         except Exception as exc:
             delay = next(delays)
             log.warning("connection lost (%s); retrying in %.0fs", exc, delay)
+            _notify(on_status, "offline", str(exc))
             await asyncio.sleep(delay)
         else:
+            _notify(on_status, "offline")
             delays = backoff_delays()  # clean disconnect: reset backoff

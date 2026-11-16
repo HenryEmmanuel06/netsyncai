@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS indexed_folders (
   path       TEXT NOT NULL UNIQUE,      -- absolute, normalized
   label      TEXT NOT NULL DEFAULT '',
   access     TEXT NOT NULL DEFAULT 'read',  -- none|read|readwrite (remote ops)
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_indexed_at TEXT
 );
 
 -- Stable file identity: file_id survives renames/moves.

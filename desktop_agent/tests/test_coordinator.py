@@ -12,7 +12,9 @@ import websockets
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from networking.coordinator import (
+    CredentialRejected,
     backoff_delays,
+    run_forever,
     run_session,
     ws_url_for,
 )
@@ -74,8 +76,40 @@ async def test_run_session_rejected_handshake():
     server, url = await _serve(bad_coordinator)
     try:
         base = url.replace("ws://", "http://")
-        with pytest.raises(RuntimeError, match="auth_failed|rejected"):
+        with pytest.raises(CredentialRejected, match="bad credential"):
             await run_session(base, "dev-1", "bad-cred", "0.1.0")
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_run_forever_stops_when_device_revoked():
+    """A revoked device must not reconnect forever — it surfaces once so
+    the desktop app can ask the user to pair again."""
+    attempts = 0
+    states = []
+
+    async def revoked_coordinator(ws):
+        nonlocal attempts
+        attempts += 1
+        await ws.recv()
+        await ws.send(Envelope(
+            type=MessageType.ERROR,
+            payload={"code": "revoked", "message": "device has been revoked"},
+        ).model_dump_json())
+        await ws.close()
+
+    server, url = await _serve(revoked_coordinator)
+    try:
+        base = url.replace("ws://", "http://")
+        with pytest.raises(CredentialRejected):
+            await asyncio.wait_for(
+                run_forever(base, "dev-1", "cred", "0.2.0",
+                            on_status=lambda s, d=None: states.append(s)),
+                timeout=5,
+            )
+        assert attempts == 1
+        assert states == ["connecting", "rejected"]
     finally:
         server.close()
         await server.wait_closed()

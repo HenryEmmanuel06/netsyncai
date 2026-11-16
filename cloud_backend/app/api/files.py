@@ -41,6 +41,7 @@ from app.schemas.files import (
     SearchResponse,
 )
 from app.security.jwt import AuthContext
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
 
 log = logging.getLogger("netsync.files")
@@ -164,7 +165,7 @@ async def search(
     if allowed_roots is not None:
         results = [
             r for r in results
-            if _under_roots(r.get("rel_path", ""), allowed_roots)
+            if _under_roots(r.get("path", ""), allowed_roots)
         ]
     return SearchResponse(query=q, results=results)
 
@@ -178,10 +179,13 @@ async def rename(
     store: DeviceStore = Depends(get_device_store),
 ):
     await _authorize(device_id, auth, store, req.path, PERM_RENAME)
-    return await dispatch(
+    result = await dispatch(
         device_id, "rename_file",
         {"path": req.path, "new_name": req.new_name},
     )
+    await log_activity(store, auth.user_id, "file.renamed", device_id=device_id,
+                       target=req.path, metadata={"new_name": req.new_name})
+    return result
 
 
 @router.post("/move")
@@ -194,9 +198,12 @@ async def move(
 ):
     await _authorize(device_id, auth, store, req.src, PERM_MOVE)
     await _authorize(device_id, auth, store, req.dst, PERM_MOVE)
-    return await dispatch(
+    result = await dispatch(
         device_id, "move_file", {"src": req.src, "dst": req.dst}
     )
+    await log_activity(store, auth.user_id, "file.moved", device_id=device_id,
+                       target=req.src, metadata={"to": req.dst})
+    return result
 
 
 @router.post("/copy")
@@ -209,9 +216,12 @@ async def copy(
 ):
     await _authorize(device_id, auth, store, req.src, PERM_DOWNLOAD)
     await _authorize(device_id, auth, store, req.dst, PERM_UPLOAD)
-    return await dispatch(
+    result = await dispatch(
         device_id, "copy_file", {"src": req.src, "dst": req.dst}
     )
+    await log_activity(store, auth.user_id, "file.copied", device_id=device_id,
+                       target=req.src, metadata={"to": req.dst})
+    return result
 
 
 @router.post("/mkdir")
@@ -223,7 +233,10 @@ async def mkdir(
     store: DeviceStore = Depends(get_device_store),
 ):
     await _authorize(device_id, auth, store, req.path, PERM_CREATE_FOLDER)
-    return await dispatch(device_id, "create_folder", {"path": req.path})
+    result = await dispatch(device_id, "create_folder", {"path": req.path})
+    await log_activity(store, auth.user_id, "file.folder_created",
+                       device_id=device_id, target=req.path)
+    return result
 
 
 @router.delete("/file")
@@ -235,7 +248,10 @@ async def delete(
     store: DeviceStore = Depends(get_device_store),
 ):
     await _authorize(device_id, auth, store, path, PERM_DELETE)
-    return await dispatch(device_id, "delete_file", {"path": path})
+    result = await dispatch(device_id, "delete_file", {"path": path})
+    await log_activity(store, auth.user_id, "file.deleted",
+                       device_id=device_id, target=path)
+    return result
 
 
 # ── transfers ────────────────────────────────────────────────────────────────
@@ -251,6 +267,8 @@ async def download(
     """Agent → relay → browser. Agent sends TRANSFER_BEGIN/CHUNK/END; we
     stream to the client and verify the SHA-256 announced in BEGIN."""
     await _authorize(device_id, auth, store, path, PERM_DOWNLOAD)
+    await log_activity(store, auth.user_id, "file.downloaded",
+                       device_id=device_id, target=path)
     transfer_id = str(uuid.uuid4())
     queue = transfers.register(transfer_id)
 
@@ -352,4 +370,7 @@ async def upload(
     ).model_dump_json())
 
     # 3. agent verifies sha256 + atomically renames, then returns result
-    return await dispatcher.await_result(step_id, timeout=TRANSFER_TIMEOUT)
+    result = await dispatcher.await_result(step_id, timeout=TRANSFER_TIMEOUT)
+    await log_activity(store, auth.user_id, "file.uploaded", device_id=device_id,
+                       target=result.get("written", path), metadata={"size": total})
+    return result

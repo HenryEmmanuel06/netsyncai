@@ -1,3 +1,4 @@
 {
-  "coordinator_url": "http://localhost:8000"
+  "coordinator_url": "http://localhost:8000",
+  "dashboard_url": "http://localhost:3000"
 }

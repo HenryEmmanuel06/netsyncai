@@ -42,6 +42,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE indexed_folders ADD COLUMN access TEXT NOT NULL DEFAULT 'read'"
         )
         conn.commit()
+    if "last_indexed_at" not in cols:
+        conn.execute("ALTER TABLE indexed_folders ADD COLUMN last_indexed_at TEXT")
+        conn.commit()
     # sync_state added in Phase 4 — CREATE IF NOT EXISTS covers it via
     # _apply_schema, nothing else needed
 

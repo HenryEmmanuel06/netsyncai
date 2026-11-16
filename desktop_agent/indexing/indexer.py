@@ -162,21 +162,26 @@ def search_files(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """FTS5 prefix search over name/rel_path/ext. Returns metadata only."""
+    """FTS5 prefix search over name/rel_path/ext. Returns metadata only.
+
+    `rel_path` is relative to its indexed folder; `path` is absolute and is
+    what remote operations (download/rename/…) must be given."""
     if query.strip():
         sql = """
             SELECT f.file_id, f.rel_path, f.name, f.ext, f.size, f.mtime,
-                   f.sha256, f.folder_id
+                   f.sha256, f.folder_id, d.path AS root
             FROM files_fts
             JOIN files f ON f.id = files_fts.rowid
-            WHERE files_fts MATCH ? AND f.deleted = 0
+            JOIN indexed_folders d ON d.id = f.folder_id
+            WHERE files_fts MATCH ? AND f.deleted = 0 AND d.access != 'none'
         """
         params: list = [_fts_query(query)]
     else:
         sql = """
             SELECT f.file_id, f.rel_path, f.name, f.ext, f.size, f.mtime,
-                   f.sha256, f.folder_id
-            FROM files f WHERE f.deleted = 0
+                   f.sha256, f.folder_id, d.path AS root
+            FROM files f JOIN indexed_folders d ON d.id = f.folder_id
+            WHERE f.deleted = 0 AND d.access != 'none'
         """
         params = []
     if ext:
@@ -184,7 +189,12 @@ def search_files(
         params.append(ext if ext.startswith(".") else f".{ext}")
     sql += " ORDER BY f.name LIMIT ? OFFSET ?"
     params += [limit, offset]
-    return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    out = []
+    for r in conn.execute(sql, params).fetchall():
+        row = dict(r)
+        row["path"] = str(Path(row.pop("root")) / row["rel_path"])
+        out.append(row)
+    return out
 
 
 def list_folder_children(conn: sqlite3.Connection, folder_id: int, prefix: str = "") -> list[dict]:

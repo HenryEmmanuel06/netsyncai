@@ -1,245 +1,357 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Eye, FolderPlus, Pencil, RefreshCw, Search, ShieldCheck, UserPlus, X,
+} from "lucide-react";
 import { apiFetch } from "@/lib/api";
-import { getSupabaseBrowser, supabaseConfigured } from "@/lib/supabase";
-import type { Device, SharedFolder } from "@/types";
-import { Share2, Trash2, UserPlus } from "lucide-react";
+import { useAuth } from "@/lib/useAuth";
+import {
+  ConfirmDialog, EmptyState, Modal, PageHeader, PermBadges, Spinner,
+} from "@/components/ui";
+import { basename, initials } from "@/lib/format";
+import type { Device, GrantEntry, SharedFolder, SharedFolderInfo } from "@/types";
 
-const PERM_BITS = [
-  { bit: 1, label: "browse" },
-  { bit: 2, label: "download" },
-  { bit: 4, label: "upload" },
-  { bit: 8, label: "rename" },
-  { bit: 32, label: "move" },
-  { bit: 64, label: "delete" },
-  { bit: 128, label: "create folder" },
-];
+const ROLES = [
+  { key: "viewer", label: "Viewer", icon: Eye,
+    bits: 1 | 2,
+    desc: "Browse and download files" },
+  { key: "editor", label: "Editor", icon: Pencil,
+    bits: 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128,
+    desc: "Everything except sharing & sync" },
+  { key: "manager", label: "Manager", icon: ShieldCheck,
+    bits: 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024,
+    desc: "Full access incl. folder sync" },
+] as const;
 
-function PermBadges({ bits }: { bits: number }) {
-  return (
-    <span className="flex flex-wrap gap-1">
-      {PERM_BITS.filter((p) => bits & p.bit).map((p) => (
-        <span key={p.bit} className="rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px]">
-          {p.label}
-        </span>
-      ))}
-    </span>
-  );
+function bitsToRole(bits: number): string {
+  if ((bits & 256) !== 0) return "manager";
+  if ((bits & 4) !== 0) return "editor";
+  return "viewer";
 }
 
 export default function PermissionsPage() {
-  const [token, setToken] = useState<string | null>(null);
+  const { token } = useAuth();
   const [devices, setDevices] = useState<Device[]>([]);
   const [owned, setOwned] = useState<SharedFolder[]>([]);
   const [granted, setGranted] = useState<SharedFolder[]>([]);
-  const [grants, setGrants] = useState<Record<string, {id: string; subject_user_id: string; permissions_granted: number}[]>>({});
-  const [deviceId, setDeviceId] = useState("");
-  const [rootPath, setRootPath] = useState("");
-  const [label, setLabel] = useState("");
-  const [grantTarget, setGrantTarget] = useState<SharedFolder | null>(null);
+  const [selected, setSelected] = useState<SharedFolder | null>(null);
+  const [grants, setGrants] = useState<GrantEntry[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
   const [subject, setSubject] = useState("");
-  const [permBits, setPermBits] = useState<number>(3); // browse+download
+  const [role, setRole] = useState<string>("viewer");
+  const [shareOpen, setShareOpen] = useState(false);
+  const [pickDevice, setPickDevice] = useState("");
+  const [deviceFolders, setDeviceFolders] = useState<SharedFolderInfo[]>([]);
+  const [pickFolder, setPickFolder] = useState("");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState<SharedFolder | null>(null);
+  const [filter, setFilter] = useState("");
 
-  const load = useCallback(async (t: string) => {
+  const load = useCallback(async () => {
+    if (!token) return;
     const [devs, shares] = await Promise.all([
-      apiFetch<Device[]>("/api/v1/devices", t),
-      apiFetch<{ owned: SharedFolder[]; granted: SharedFolder[] }>(
-        "/api/v1/sharing", t,
-      ),
+      apiFetch<Device[]>("/api/v1/devices", token),
+      apiFetch<{ owned: SharedFolder[]; granted: SharedFolder[] }>("/api/v1/sharing", token),
     ]);
     setDevices(devs.filter((d) => !d.revoked_at));
     setOwned(shares.owned);
     setGranted(shares.granted);
-  }, []);
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    (async () => {
-      if (!supabaseConfigured) return;
-      const sb = getSupabaseBrowser();
-      const { data } = await sb!.auth.getSession();
-      if (!data.session) return;
-      setToken(data.session.access_token);
-      await load(data.session.access_token);
-    })();
-  }, [load]);
+    if (!selected || !token) return;
+    apiFetch<GrantEntry[]>(`/api/v1/sharing/${selected.id}/grants`, token)
+      .then(setGrants).catch(() => setGrants([]));
+  }, [selected, token]);
 
-  async function createShare(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  useEffect(() => {
+    if (!pickDevice || !token) { setDeviceFolders([]); return; }
+    apiFetch<{ folders: SharedFolderInfo[] }>(
+      `/api/v1/devices/${pickDevice}/folders`, token,
+    ).then((r) => setDeviceFolders(r.folders)).catch(() => setDeviceFolders([]));
+  }, [pickDevice, token]);
+
+  async function createShare() {
+    if (!pickFolder) return;
+    setBusy(true); setError(null);
     try {
+      const f = deviceFolders.find((x) => x.path === pickFolder);
       await apiFetch("/api/v1/sharing", token!, {
         method: "POST",
-        body: JSON.stringify({ device_id: deviceId, root_path: rootPath, label }),
+        body: JSON.stringify({
+          device_id: pickDevice, root_path: pickFolder,
+          label: label || f?.label || basename(pickFolder),
+        }),
       });
-      setRootPath(""); setLabel("");
-      await load(token!);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "create failed");
-    }
+      setShareOpen(false); setPickFolder(""); setLabel("");
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "failed"); }
+    finally { setBusy(false); }
   }
 
-  async function addGrant(e: React.FormEvent) {
-    e.preventDefault();
-    if (!grantTarget) return;
-    setError(null);
+  async function addGrant() {
+    if (!selected || !subject.trim()) return;
+    setBusy(true); setError(null);
+    const bits = ROLES.find((r) => r.key === role)!.bits;
     try {
-      await apiFetch(`/api/v1/sharing/${grantTarget.id}/grants`, token!, {
+      await apiFetch(`/api/v1/sharing/${selected.id}/grants`, token!, {
         method: "POST",
-        body: JSON.stringify({ subject, permissions: permBits }),
+        body: JSON.stringify({ subject: subject.trim(), permissions: bits }),
       });
-      setSubject("");
-      setGrantTarget(null);
-      await load(token!);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "grant failed");
-    }
+      setSubject(""); setAddOpen(false);
+      const g = await apiFetch<GrantEntry[]>(`/api/v1/sharing/${selected.id}/grants`, token!);
+      setGrants(g);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "grant failed"); }
+    finally { setBusy(false); }
   }
 
-  async function removeShare(id: string) {
-    if (!window.confirm("Remove this share? Grants are deleted.")) return;
-    await apiFetch(`/api/v1/sharing/${id}`, token!, { method: "DELETE" });
-    await load(token!);
-  }
-
-  async function showGrants(share: SharedFolder) {
-    const g = await apiFetch<{id: string; subject_user_id: string; permissions_granted: number}[]>(
-      `/api/v1/sharing/${share.id}/grants`, token!,
-    );
-    setGrants((prev) => ({ ...prev, [share.id]: g }));
-  }
-
-  async function revokeGrant(shareId: string, grantId: string) {
-    await apiFetch(`/api/v1/sharing/${shareId}/grants/${grantId}`, token!, {
-      method: "DELETE",
+  async function changeRole(g: GrantEntry, next: string) {
+    await apiFetch(`/api/v1/sharing/${selected!.id}/grants/${g.id}`, token!, { method: "DELETE" });
+    const bits = ROLES.find((r) => r.key === next)!.bits;
+    await apiFetch(`/api/v1/sharing/${selected!.id}/grants`, token!, {
+      method: "POST",
+      body: JSON.stringify({ subject: g.subject_user_id, permissions: bits }),
     });
-    await load(token!);
-    const share = owned.find((s) => s.id === shareId);
-    if (share) await showGrants(share);
+    const g2 = await apiFetch<GrantEntry[]>(`/api/v1/sharing/${selected!.id}/grants`, token!);
+    setGrants(g2);
   }
 
-  function toggleBit(bit: number) {
-    setPermBits((b) => (b & bit ? b & ~bit : b | bit));
+  async function revokeGrant(g: GrantEntry) {
+    await apiFetch(`/api/v1/sharing/${selected!.id}/grants/${g.id}`, token!, { method: "DELETE" });
+    setGrants(grants.filter((x) => x.id !== g.id));
   }
+
+  async function stopSharing(s: SharedFolder) {
+    setConfirmStop(null);
+    await apiFetch(`/api/v1/sharing/${s.id}`, token!, { method: "DELETE" });
+    if (selected?.id === s.id) setSelected(null);
+    await load();
+  }
+
+  const filtered = owned.filter((s) =>
+    (s.label + s.root_path).toLowerCase().includes(filter.toLowerCase()));
 
   return (
-    <div className="mx-auto max-w-3xl">
-      <h1 className="text-2xl font-semibold">Permissions</h1>
-      <p className="mt-1 text-sm text-[var(--color-text-dim)]">
-        Share folders from your devices with other NetSync users. The folder
-        must be indexed on the agent (<code>--access read</code> or higher).
-      </p>
+    <div>
+      <PageHeader
+        title="Permissions & Access Control"
+        subtitle="Decide who can see your folders and what they can do — nothing is shared until you grant it."
+        actions={
+          <button className="btn btn-primary" onClick={() => setShareOpen(true)}>
+            <FolderPlus size={15} /> Share Folder
+          </button>
+        }
+      />
 
-      <form onSubmit={createShare} className="card mt-6 space-y-3 p-4">
-        <h2 className="text-sm font-medium">Share a folder</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)} required
-            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm">
-            <option value="">Device…</option>
-            {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-          <input value={label} onChange={(e) => setLabel(e.target.value)}
-            placeholder="Label (e.g. Project files)"
-            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm" />
-          <input value={rootPath} onChange={(e) => setRootPath(e.target.value)} required
-            placeholder="Root path on that device (e.g. C:\shared\docs)"
-            className="col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm" />
-        </div>
-        <button className="rounded-lg bg-[var(--color-primary)] px-4 py-2 text-sm font-medium">
-          <Share2 size={14} className="mr-1 inline" /> Create share
-        </button>
-      </form>
-
-      {error && <div className="card mt-4 p-3 text-sm text-red-400">{error}</div>}
-
-      <h2 className="mt-8 text-lg font-medium">Your shared folders</h2>
-      <div className="mt-3 space-y-3">
-        {owned.map((s) => (
-          <div key={s.id} className="card p-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="font-medium">{s.label || s.root_path}</div>
-                <div className="mt-1 text-xs text-[var(--color-text-dim)]">
-                  {s.device_name} · {s.root_path}
+      <div className="grid gap-5 lg:grid-cols-[300px_1fr]">
+        {/* left: shared folders */}
+        <div>
+          <div className="input mb-3 flex items-center gap-2 !py-2">
+            <Search size={14} className="text-[var(--color-text-dim)]" />
+            <input className="w-full bg-transparent text-sm outline-none"
+              placeholder="Search folders…" value={filter}
+              onChange={(e) => setFilter(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            {filtered.map((s) => (
+              <button key={s.id} onClick={() => setSelected(s)}
+                className={`card w-full p-3 text-left transition-colors ${
+                  selected?.id === s.id ? "border-[var(--color-primary)]" : "card-hover"
+                }`}>
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[rgba(251,191,36,0.12)]">
+                    <FolderPlus size={15} className="text-[var(--color-warn)]" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">{s.label || basename(s.root_path)}</div>
+                    <div className="truncate text-xs text-[var(--color-text-dim)]">{s.root_path}</div>
+                  </div>
                 </div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => setGrantTarget(s)}
-                  className="rounded border border-[var(--color-border)] px-2 py-1 text-xs">
-                  <UserPlus size={12} className="mr-1 inline" /> Grant
-                </button>
-                <button onClick={() => showGrants(s)}
-                  className="rounded border border-[var(--color-border)] px-2 py-1 text-xs">Grants</button>
-                <button onClick={() => removeShare(s.id)}
-                  className="rounded border border-[var(--color-border)] px-2 py-1 text-xs text-red-400">
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            </div>
-
-            {grantTarget?.id === s.id && (
-              <form onSubmit={addGrant} className="mt-3 border-t border-[var(--color-border)] pt-3">
-                <div className="flex flex-wrap gap-2">
-                  <input value={subject} onChange={(e) => setSubject(e.target.value)} required
-                    placeholder="user UUID, email, or @handle"
-                    className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-xs" />
-                  <button className="rounded bg-[var(--color-primary)] px-3 py-1.5 text-xs font-medium">Add</button>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {PERM_BITS.map((p) => (
-                    <label key={p.bit} className="flex items-center gap-1 text-xs">
-                      <input type="checkbox" checked={!!(permBits & p.bit)}
-                        onChange={() => toggleBit(p.bit)} />
-                      {p.label}
-                    </label>
-                  ))}
-                </div>
-              </form>
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <EmptyState icon={<FolderPlus size={18} />} title="Nothing shared yet"
+                hint="Share a folder from one of your computers, then grant access to colleagues." />
             )}
+          </div>
 
-            {grants[s.id] && (
-              <div className="mt-3 space-y-1 border-t border-[var(--color-border)] pt-3">
-                {grants[s.id].length === 0 && (
-                  <div className="text-xs text-[var(--color-text-dim)]">No grants yet.</div>
-                )}
-                {grants[s.id].map((g) => (
-                  <div key={g.id} className="flex items-center justify-between text-xs">
-                    <span className="font-mono">{g.subject_user_id.slice(0, 8)}…</span>
-                    <span className="flex items-center gap-2">
-                      <PermBadges bits={g.permissions_granted} />
-                      <button onClick={() => revokeGrant(s.id, g.id)} className="text-red-400">revoke</button>
-                    </span>
+          {granted.length > 0 && (
+            <>
+              <div className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-dim)]">
+                Shared with you
+              </div>
+              <div className="space-y-2">
+                {granted.map((s) => (
+                  <div key={s.grant_id ?? s.id} className="card p-3">
+                    <div className="truncate text-sm font-medium">{s.label || basename(s.root_path)}</div>
+                    <div className="mt-0.5 truncate text-xs text-[var(--color-text-dim)]">
+                      on {s.device_name} · <span className="capitalize">{bitsToRole(s.permissions ?? 0)}</span>
+                    </div>
                   </div>
                 ))}
               </div>
-            )}
-          </div>
-        ))}
-        {owned.length === 0 && (
-          <div className="card p-4 text-sm text-[var(--color-text-dim)]">No shares yet.</div>
-        )}
+            </>
+          )}
+        </div>
+
+        {/* right: detail */}
+        <div>
+          {!selected ? (
+            <EmptyState icon={<ShieldCheck size={20} />} title="Select a shared folder"
+              hint="Pick a folder on the left to manage who has access." />
+          ) : (
+            <div className="card p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">{selected.label || basename(selected.root_path)}</h2>
+                  <div className="mt-0.5 text-xs text-[var(--color-text-dim)]">
+                    {selected.root_path} · on {selected.device_name || "your device"}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+                    <UserPlus size={14} /> Add User
+                  </button>
+                  <button className="btn btn-danger" onClick={() => setConfirmStop(selected)}>
+                    Stop Sharing
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5 overflow-hidden rounded-lg border border-[var(--color-border)]">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-[var(--color-surface-2)] text-left text-xs text-[var(--color-text-dim)]">
+                      <th className="px-4 py-2.5 font-medium">User</th>
+                      <th className="px-4 py-2.5 font-medium">Permission</th>
+                      <th className="px-4 py-2.5 font-medium">Can do</th>
+                      <th className="px-4 py-2.5" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {grants.map((g) => (
+                      <tr key={g.id} className="border-t border-[var(--color-border)]">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs font-bold">
+                              {initials(g.subject_user_id)}
+                            </span>
+                            <span className="font-mono text-xs">{g.subject_user_id.slice(0, 8)}…</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select className="input !py-1 text-xs capitalize"
+                            value={bitsToRole(g.permissions_granted)}
+                            onChange={(e) => changeRole(g, e.target.value)}>
+                            {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-4 py-3"><PermBadges bits={g.permissions_granted} /></td>
+                        <td className="px-4 py-3 text-right">
+                          <button className="btn btn-ghost !p-2 text-[var(--color-danger)]"
+                            title="Remove access" onClick={() => revokeGrant(g)}>
+                            <X size={13} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {grants.length === 0 && (
+                      <tr><td colSpan={4} className="px-4 py-8 text-center text-xs text-[var(--color-text-dim)]">
+                        Only you can see this folder — add a user to share it.
+                      </td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {addOpen && (
+                <div className="fade-up mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+                  <div className="mb-3 text-sm font-medium">Grant access</div>
+                  <input className="input w-full" value={subject} autoFocus
+                    placeholder="Colleague's email, @handle, or user ID"
+                    onChange={(e) => setSubject(e.target.value)} />
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    {ROLES.map((r) => (
+                      <button key={r.key} onClick={() => setRole(r.key)}
+                        className={`rounded-lg border p-3 text-left transition-colors ${
+                          role === r.key
+                            ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
+                            : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+                        }`}>
+                        <r.icon size={15} className={role === r.key ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
+                        <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
+                        <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">{r.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                  {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button className="btn btn-ghost" onClick={() => { setAddOpen(false); setError(null); }}>Cancel</button>
+                    <button className="btn btn-primary" disabled={busy || !subject.trim()} onClick={addGrant}>
+                      {busy ? <Spinner size={14} /> : <UserPlus size={14} />} Grant access
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      <h2 className="mt-8 text-lg font-medium">Shared with you</h2>
-      <div className="mt-3 space-y-3">
-        {granted.map((s) => (
-          <div key={s.grant_id ?? s.id} className="card flex items-center justify-between p-4">
-            <div>
-              <div className="font-medium">{s.label || s.root_path}</div>
-              <div className="mt-1 text-xs text-[var(--color-text-dim)]">
-                {s.device_name} · {s.root_path}
-              </div>
-            </div>
-            <PermBadges bits={s.permissions ?? 0} />
-          </div>
-        ))}
-        {granted.length === 0 && (
-          <div className="card p-4 text-sm text-[var(--color-text-dim)]">
-            Nothing shared with you yet.
-          </div>
-        )}
-      </div>
+      {/* share-folder modal */}
+      {shareOpen && (
+        <Modal title="Share a folder" onClose={() => setShareOpen(false)}>
+          <p className="-mt-1 mb-3 text-xs text-[var(--color-text-dim)]">
+            Pick a computer and one of its shared folders — the folder must
+            already be shared on that computer (Devices → Folders).
+          </p>
+          <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Computer</label>
+          <select className="input mb-3 w-full" value={pickDevice}
+            onChange={(e) => { setPickDevice(e.target.value); setPickFolder(""); }}>
+            <option value="">Choose…</option>
+            {devices.map((d) => (
+              <option key={d.id} value={d.id}>{d.name} {d.status !== "online" ? "(offline)" : ""}</option>
+            ))}
+          </select>
+          <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Folder</label>
+          <select className="input mb-3 w-full" value={pickFolder}
+            disabled={!pickDevice || deviceFolders.length === 0}
+            onChange={(e) => setPickFolder(e.target.value)}>
+            <option value="">
+              {pickDevice
+                ? deviceFolders.length ? "Choose…" : "No folders shared on that computer yet"
+                : "Pick a computer first"}
+            </option>
+            {deviceFolders.map((f) => (
+              <option key={f.id} value={f.path}>{f.label || basename(f.path)} — {f.path}</option>
+            ))}
+          </select>
+          <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Shown as</label>
+          <input className="input mb-4 w-full" placeholder="e.g. Project files"
+            value={label} onChange={(e) => setLabel(e.target.value)} />
+          {error && <p className="mb-2 text-xs text-[var(--color-danger)]">{error}</p>}
+          <button className="btn btn-primary w-full justify-center"
+            disabled={!pickFolder || busy} onClick={createShare}>
+            {busy ? <Spinner size={14} /> : <RefreshCw size={14} />} Create share
+          </button>
+        </Modal>
+      )}
+
+      {confirmStop && (
+        <ConfirmDialog
+          title="Stop sharing this folder?"
+          body={`Everyone with access to “${confirmStop.label || confirmStop.root_path}” will lose it immediately.`}
+          confirmLabel="Stop sharing" danger
+          onConfirm={() => stopSharing(confirmStop)}
+          onCancel={() => setConfirmStop(null)}
+        />
+      )}
     </div>
   );
 }

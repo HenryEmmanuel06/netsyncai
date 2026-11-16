@@ -21,6 +21,7 @@ class MkdirRequest(BaseModel):
 
 class FileEntry(BaseModel):
     name: str
+    path: str | None = None       # absolute on the device — use for operations
     rel_path: str
     is_dir: bool = False
     ext: str | None = None

@@ -21,6 +21,7 @@ from app.schemas.sharing import (
     ShareCreateRequest,
 )
 from app.security.jwt import AuthContext
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
 
 router = APIRouter(prefix="/sharing", tags=["sharing"])
@@ -37,9 +38,12 @@ async def create_share(
         await store.get_device(auth.user_id, req.device_id)
     except DeviceNotFound:
         raise http_404("device not found")
-    return await store.create_shared_folder(
+    share = await store.create_shared_folder(
         auth.user_id, req.device_id, req.label, req.root_path
     )
+    await log_activity(store, auth.user_id, "share.created", device_id=req.device_id,
+                       target=req.root_path, metadata={"label": share["label"]})
+    return share
 
 
 @router.get("", response_model=SharesResponse)
@@ -59,10 +63,14 @@ async def delete_share(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
+    share = await store.get_share(folder_id)
     try:
         await store.delete_share(auth.user_id, folder_id)
     except DeviceNotFound:
         raise http_404("share not found")
+    await log_activity(store, auth.user_id, "share.deleted",
+                       device_id=share["device_id"] if share else None,
+                       target=share["root_path"] if share else folder_id)
 
 
 @router.post("/{folder_id}/grants", response_model=GrantResponse,
@@ -84,11 +92,15 @@ async def add_grant(
     if subject == auth.user_id:
         raise http_422("cannot grant access to yourself")
     try:
-        return await store.add_grant(
+        grant = await store.add_grant(
             folder_id, subject, req.permissions, auth.user_id
         )
     except DeviceNotFound:
         raise http_404("share not found")
+    await log_activity(store, auth.user_id, "grant.added",
+                       device_id=share["device_id"], target=share["root_path"],
+                       metadata={"subject": req.subject, "permissions": req.permissions})
+    return grant
 
 
 @router.get("/{folder_id}/grants", response_model=list[GrantResponse])
@@ -115,3 +127,4 @@ async def revoke_grant(
         await store.revoke_grant(folder_id, grant_id, auth.user_id)
     except DeviceNotFound:
         raise http_404("grant not found")
+    await log_activity(store, auth.user_id, "grant.revoked", target=folder_id)

@@ -1,9 +1,11 @@
 """Device pairing endpoints.
 
-Flow: signed-in owner POSTs /pairing → gets a short-lived code → agent
-POSTs /pairing/redeem with the code → gets a device_id + scoped credential.
-The redeem endpoint is intentionally not JWT-authed: the code IS the
-authorization. Codes are 8 chars (~40 bits), single-use, 10-minute TTL.
+Flow: signed-in owner POSTs /pairing → gets a short-lived code → the
+desktop app (opened via a netsync://pair link, or the user types the code)
+GETs /pairing/preview to show "Connect this PC to <email>?" → on the
+user's local confirmation it POSTs /pairing/redeem → device_id + scoped
+credential. Redeem and preview are intentionally not JWT-authed: the code
+IS the authorization. Codes are 8 chars (~40 bits), single-use, 10-min TTL.
 """
 
 from __future__ import annotations
@@ -15,10 +17,12 @@ from app.errors import http_401
 from app.schemas.pairing import (
     PairingCreateRequest,
     PairingCreateResponse,
+    PairingPreviewResponse,
     PairingRedeemRequest,
     PairingRedeemResponse,
 )
 from app.security.jwt import AuthContext
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceStore, PairingError
 
 router = APIRouter(prefix="/pairing", tags=["pairing"])
@@ -33,11 +37,22 @@ async def create_pairing(
     store: DeviceStore = Depends(get_device_store),
 ) -> PairingCreateResponse:
     code, expires = await store.create_pairing(
-        auth.user_id, req.device_name, PAIRING_TTL_SECONDS
+        auth.user_id, req.device_name, PAIRING_TTL_SECONDS, owner_email=auth.email
     )
     return PairingCreateResponse(
         code=code, expires_at=expires, expires_in_seconds=PAIRING_TTL_SECONDS
     )
+
+
+@router.get("/preview", response_model=PairingPreviewResponse)
+async def preview_pairing(
+    code: str,
+    store: DeviceStore = Depends(get_device_store),
+) -> PairingPreviewResponse:
+    try:
+        return PairingPreviewResponse(**await store.preview_pairing(code))
+    except PairingError as exc:
+        raise http_401(str(exc)) from exc
 
 
 @router.post("/redeem", response_model=PairingRedeemResponse)
@@ -49,6 +64,8 @@ async def redeem_pairing(
         device, credential = await store.redeem_pairing(req.code, req.agent_version)
     except PairingError as exc:
         raise http_401(str(exc)) from exc
+    await log_activity(store, device.owner_id, "device.paired",
+                       device_id=device.id, target=device.name)
     return PairingRedeemResponse(
         device_id=device.id,
         device_name=device.name,

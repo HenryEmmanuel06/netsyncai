@@ -24,6 +24,12 @@ def test_unknown_tool_rejected():
         validate_steps([PlanStep(tool="run_shell", args={})])
 
 
+def test_owner_only_tools_never_plannable():
+    for tool in ("add_folder", "remove_folder", "list_local_dirs", "set_folder_access"):
+        with pytest.raises(PlanError, match="unknown tool"):
+            validate_steps([PlanStep(tool=tool, args={})])
+
+
 def test_unknown_arg_rejected():
     with pytest.raises(PlanError, match="no arg"):
         validate_steps([

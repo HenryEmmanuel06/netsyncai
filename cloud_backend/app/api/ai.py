@@ -22,6 +22,7 @@ from app.orchestration.dispatcher import (
 )
 from app.schemas.ai import PlanStepOut, TaskRequest, TaskResponse
 from app.security.jwt import AuthContext
+from app.services.activity import log_activity
 from app.services.device_registry import DeviceStore
 
 log = logging.getLogger("netsync.ai")
@@ -73,6 +74,9 @@ async def run_task(
             break  # stop the chain on first failure
         out.append(entry)
 
+    await log_activity(store, auth.user_id, "ai.task", target=req.prompt[:200],
+                       metadata={"steps": len(out),
+                                 "ok": all(s.ok for s in out) if out else False})
     return TaskResponse(
         summary=plan.summary,
         needs_confirmation=destructive,
