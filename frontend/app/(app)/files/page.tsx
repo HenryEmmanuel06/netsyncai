@@ -334,8 +334,32 @@ function FilesInner() {
         </div>
       )}
 
-      {/* entries */}
-      <div className="card overflow-hidden">
+      {/* two-pane: folder tree + entries */}
+      <div className="grid gap-4 lg:grid-cols-[230px_1fr]">
+        <div className="card hidden self-start p-2 lg:block">
+          <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-dim)]">
+            Shared folders
+          </div>
+          {roots.map((r) => (
+            <button key={r.path}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm ${
+                path.toLowerCase().startsWith(r.path.toLowerCase())
+                  ? "bg-[rgba(139,92,246,0.15)] text-[var(--color-accent)]"
+                  : "hover:bg-[var(--color-surface-2)]"
+              }`}
+              onClick={() => picker && browse(picker.deviceId, r.path)}>
+              <HardDrive size={14} className="shrink-0" />
+              <span className="truncate">{r.label}</span>
+            </button>
+          ))}
+          {roots.length === 0 && (
+            <div className="px-2.5 py-3 text-xs text-[var(--color-text-dim)]">
+              No shared folders — add them under Devices → Folders.
+            </div>
+          )}
+        </div>
+
+        <div className="card overflow-hidden">
         {loading ? (
           <div className="p-10 text-center"><Spinner /></div>
         ) : entries.length === 0 ? (
@@ -422,6 +446,7 @@ function FilesInner() {
             </tbody>
           </table>
         )}
+        </div>
       </div>
       {!path && !searchMode && roots.length > 0 && (
         <div className="mt-4 grid gap-2 sm:grid-cols-2">

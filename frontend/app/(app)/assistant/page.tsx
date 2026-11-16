@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot, Check, SendHorizontal, ShieldAlert, X } from "lucide-react";
+import { Bot, Check, FolderSearch, FolderSync, Monitor, Send, SendHorizontal, ShieldAlert, X } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { Spinner } from "@/components/ui";
@@ -14,11 +14,15 @@ interface Message {
   pending?: boolean;
 }
 
-const EXAMPLES = [
-  "Search my computers for files named proposal",
-  "Show the status of my devices",
-  "Search for PDF files on my laptop",
-  "Create a folder called Backups",
+const SUGGESTIONS = [
+  { icon: <FolderSearch size={16} />, label: "Find and download a file",
+    prompt: "Search my computers for files named proposal" },
+  { icon: <FolderSync size={16} />, label: "Synchronize a folder",
+    prompt: "Show my sync sessions" },
+  { icon: <Send size={16} />, label: "Send a file to another device",
+    prompt: "Copy report.pdf from this device to my laptop" },
+  { icon: <Monitor size={16} />, label: "Show device status",
+    prompt: "Show the status of my devices" },
 ];
 
 export default function AssistantPage() {
@@ -75,34 +79,34 @@ export default function AssistantPage() {
 
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col">
-      <div className="mb-4 flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#5f32d6]">
-          <Bot size={19} className="text-white" />
-        </span>
-        <div>
-          <h1 className="text-xl font-semibold">AI Assistant</h1>
-          <p className="text-xs text-[var(--color-text-dim)]">
-            Describe a task — it plans validated steps across your computers.
-            Destructive plans ask first.
-          </p>
-        </div>
+      <div className="mb-4">
+        <h1 className="text-xl font-semibold">AI Assistant</h1>
+        <p className="text-xs text-[var(--color-text-dim)]">
+          Use natural language to manage your files, devices, and synchronization.
+        </p>
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto pr-1">
         {history.length === 0 && (
-          <div className="card mx-auto mt-10 max-w-md p-5">
-            <div className="mb-3 text-sm font-medium">Try asking…</div>
-            <div className="space-y-2">
-              {EXAMPLES.map((ex) => (
-                <button key={ex} onClick={() => setPrompt(ex)}
-                  className="block w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-left text-sm text-[var(--color-text-dim)] hover:border-[var(--color-primary)] hover:text-[var(--color-text)]">
-                  “{ex}”
+          <div className="mx-auto mt-14 max-w-lg text-center">
+            <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-[#8b5cf6] to-[#5f32d6] shadow-[0_0_50px_rgba(139,92,246,0.35)]">
+              <Bot size={30} className="text-white" />
+            </span>
+            <h2 className="mt-5 text-2xl font-semibold">How can I help you today?</h2>
+            <p className="mt-2 text-sm text-[var(--color-text-dim)]">
+              Describe a file task — I plan validated steps across your computers.
+            </p>
+            <div className="mt-6 grid gap-2.5 sm:grid-cols-2">
+              {SUGGESTIONS.map((s) => (
+                <button key={s.label} onClick={() => setPrompt(s.prompt)}
+                  className="card card-hover flex items-center gap-3 p-3.5 text-left text-sm">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[rgba(139,92,246,0.15)] text-[var(--color-accent)]">
+                    {s.icon}
+                  </span>
+                  {s.label}
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">
-              Requires GEMINI_API_KEY configured on the backend.
-            </p>
           </div>
         )}
 
@@ -155,16 +159,20 @@ export default function AssistantPage() {
         <div ref={bottomRef} />
       </div>
 
-      <form onSubmit={submit} className="mt-4 flex items-center gap-2 pb-2">
-        <input
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Ask NetSync to find, download, or sync files…"
-          className="input flex-1 !py-3"
-        />
-        <button type="submit" className="btn btn-primary !p-3" aria-label="Send">
-          <SendHorizontal size={17} />
-        </button>
+      <form onSubmit={submit} className="mt-4 pb-2">
+        <div className="input flex items-center gap-2 !py-2">
+          <input
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Type a command… e.g. 'On Henry-Laptop find the project.zip'"
+            className="flex-1 bg-transparent text-sm outline-none" />
+          <button type="submit" className="btn btn-primary !px-3 !py-2" aria-label="Send" disabled={!prompt.trim()}>
+            <SendHorizontal size={16} />
+          </button>
+        </div>
+        <p className="mt-2 text-center text-[11px] text-[var(--color-text-dim)]">
+          The planner only uses safe, allowlisted operations — destructive plans ask before running.
+        </p>
       </form>
     </div>
   );

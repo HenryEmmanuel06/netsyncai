@@ -102,6 +102,21 @@ select.input option { background: var(--color-surface); }
 .badge-purple{ background: rgba(139, 92, 246, 0.16); color: var(--color-accent); }
 .badge-blue  { background: rgba(96, 165, 250, 0.14); color: #7db4f8; }
 
+.tab {
+  padding: 0.45rem 1rem;
+  border-radius: 0.55rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.tab:hover { color: var(--color-text); }
+.tab-active {
+  background: rgba(139, 92, 246, 0.18);
+  color: var(--color-accent);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

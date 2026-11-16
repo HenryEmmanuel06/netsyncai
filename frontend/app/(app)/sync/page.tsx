@@ -36,6 +36,7 @@ export default function SyncPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stopTarget, setStopTarget] = useState<SyncSession | null>(null);
+  const [tab, setTab] = useState<"active" | "paused" | "stopped">("active");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -115,6 +116,20 @@ export default function SyncPage() {
 
       {error && <div className="card mb-4 px-4 py-3 text-sm text-[var(--color-danger)]">{error}</div>}
 
+      {sessions !== null && sessions.length > 0 && (
+        <div className="mb-4 flex gap-1 rounded-lg bg-[var(--color-surface-2)] p-1 w-fit">
+          {(["active", "paused", "stopped"] as const).map((k) => (
+            <button key={k} className={`tab ${tab === k ? "tab-active" : ""}`}
+              onClick={() => setTab(k)}>
+              {k === "active" ? "Active Syncs" : k === "paused" ? "Paused" : "Stopped"} (
+              {sessions.filter((s) =>
+                k === "active" ? s.state === "active" || s.state === "pending" || s.state === "error"
+                  : s.state === k).length})
+            </button>
+          ))}
+        </div>
+      )}
+
       {sessions === null ? (
         <div className="py-16 text-center"><Spinner /></div>
       ) : sessions.length === 0 ? (
@@ -126,7 +141,9 @@ export default function SyncPage() {
         />
       ) : (
         <div className="space-y-3">
-          {sessions.map((s) => (
+          {sessions.filter((s) =>
+            tab === "active" ? s.state === "active" || s.state === "pending" || s.state === "error"
+              : s.state === tab).map((s) => (
             <div key={s.id} className="card card-hover p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">

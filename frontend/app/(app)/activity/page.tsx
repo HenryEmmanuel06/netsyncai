@@ -67,6 +67,7 @@ export default function ActivityPage() {
   const { token } = useAuth();
   const [items, setItems] = useState<ActivityItem[] | null>(null);
   const [limit, setLimit] = useState(50);
+  const [typeFilter, setTypeFilter] = useState("all");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -83,6 +84,20 @@ export default function ActivityPage() {
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Activity" subtitle="Everything that happened across your network." />
+      {items && items.length > 0 && (
+        <div className="mb-4">
+          <select className="input !py-1.5 text-xs" value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="all">All activities</option>
+            <option value="device">Devices</option>
+            <option value="file">Files</option>
+            <option value="folder">Folders</option>
+            <option value="share">Sharing</option>
+            <option value="sync">Sync</option>
+            <option value="ai">AI tasks</option>
+          </select>
+        </div>
+      )}
       {items === null ? (
         <div className="py-16 text-center"><Spinner /></div>
       ) : items.length === 0 ? (
@@ -90,7 +105,7 @@ export default function ActivityPage() {
           hint="Pair a computer and share a folder — everything you do is recorded here." />
       ) : (
         <div className="card divide-y divide-[var(--color-border)]">
-          {items.map((a) => (
+          {items.filter((a) => typeFilter === "all" || a.action.startsWith(typeFilter + ".")).map((a) => (
             <div key={a.id} className="flex items-center gap-3 px-4 py-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-surface-2)] text-[var(--color-accent)]">
                 {ICONS[a.action] ?? <ActivityIcon size={15} />}

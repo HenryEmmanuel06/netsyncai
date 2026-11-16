@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  Bot, ChevronDown, FolderGit2, LayoutDashboard, MonitorSmartphone,
+  ArrowLeftRight, Bot, ChevronDown, FolderGit2, LayoutDashboard, MonitorSmartphone,
   History, RefreshCw, Settings, ShieldCheck, LogOut, Boxes,
 } from "lucide-react";
 import { apiFetch, API_URL } from "@/lib/api";
@@ -19,6 +19,7 @@ const NAV = [
   { href: "/assistant", label: "AI Assistant", icon: Bot },
   { href: "/files", label: "Files", icon: FolderGit2 },
   { href: "/sync", label: "Synchronization", icon: RefreshCw },
+  { href: "/transfers", label: "Transfers", icon: ArrowLeftRight },
   { href: "/devices", label: "Devices", icon: MonitorSmartphone },
   { href: "/permissions", label: "Permissions", icon: ShieldCheck },
   { href: "/activity", label: "Activity", icon: History },

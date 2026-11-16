@@ -27,6 +27,7 @@ interface Ctx {
   fail: (id: number, error?: string) => void;
   cancel: (id: number) => void;
   dismiss: (id: number) => void;
+  clearFinished: () => void;
 }
 
 const TransferContext = createContext<Ctx | null>(null);
@@ -42,7 +43,6 @@ let nextId = 1;
 export function TransferProvider({ children }: { children: React.ReactNode }) {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const controllers = useRef(new Map<number, AbortController>());
-  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
 
   const update = useCallback((id: number, patch: Partial<Transfer>) => {
     setTransfers((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -50,21 +50,14 @@ export function TransferProvider({ children }: { children: React.ReactNode }) {
 
   const dismiss = useCallback((id: number) => {
     controllers.current.delete(id);
-    const tm = timers.current.get(id);
-    if (tm) clearTimeout(tm);
-    timers.current.delete(id);
     setTransfers((ts) => ts.filter((t) => t.id !== id));
   }, []);
-
-  const autoDismiss = useCallback((id: number) => {
-    timers.current.set(id, setTimeout(() => dismiss(id), 8000));
-  }, [dismiss]);
 
   const begin = useCallback((name: string, size: number, direction: "down" | "up"): Handle => {
     const id = nextId++;
     const controller = new AbortController();
     controllers.current.set(id, controller);
-    setTransfers((ts) => [...ts, {
+    setTransfers((ts) => [...ts.slice(-49), {
       id, name, size, direction, received: 0, status: "active",
     }]);
     return { id, signal: controller.signal };
@@ -77,36 +70,47 @@ export function TransferProvider({ children }: { children: React.ReactNode }) {
   const finish = useCallback((id: number) => {
     controllers.current.delete(id);
     update(id, { status: "done" });
-    autoDismiss(id);
-  }, [update, autoDismiss]);
+  }, [update]);
 
   const fail = useCallback((id: number, error?: string) => {
     controllers.current.delete(id);
     update(id, { status: "error", error });
-    autoDismiss(id);
-  }, [update, autoDismiss]);
+  }, [update]);
 
   const cancel = useCallback((id: number) => {
     controllers.current.get(id)?.abort();
     controllers.current.delete(id);
     update(id, { status: "cancelled" });
-    autoDismiss(id);
-  }, [update, autoDismiss]);
+  }, [update]);
+
+  const clearFinished = useCallback(() => {
+    setTransfers((ts) => ts.filter((t) => t.status === "active"));
+  }, []);
 
   return (
-    <TransferContext.Provider value={{ transfers, begin, progress, finish, fail, cancel, dismiss }}>
+    <TransferContext.Provider value={{
+      transfers, begin, progress, finish, fail, cancel, dismiss, clearFinished,
+    }}>
       {children}
-      <TransferWidget transfers={transfers} onCancel={cancel} onDismiss={dismiss} />
+      <TransferWidget transfers={transfers} onCancel={cancel}
+        onDismiss={dismiss} onClear={clearFinished} />
     </TransferContext.Provider>
   );
 }
 
-function TransferWidget({ transfers, onCancel, onDismiss }: {
+function TransferWidget({ transfers, onCancel, onDismiss, onClear }: {
   transfers: Transfer[];
   onCancel: (id: number) => void;
   onDismiss: (id: number) => void;
+  onClear: () => void;
 }) {
-  if (transfers.length === 0) return null;
+  // widget shows active + the last few finished items
+  const shown = [...transfers]
+    .sort((a, b) => b.id - a.id)
+    .filter((t, i) => t.status === "active" || i < 5)
+    .slice(0, 6)
+    .sort((a, b) => a.id - b.id);
+  if (shown.length === 0) return null;
   const active = transfers.filter((t) => t.status === "active").length;
   return (
     <div className="fixed bottom-4 right-4 z-50 w-80">
@@ -114,12 +118,12 @@ function TransferWidget({ transfers, onCancel, onDismiss }: {
         <div className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs font-semibold">
           <span>Transfers{active > 0 ? ` — ${active} in progress` : ""}</span>
           {active === 0 && (
-            <button onClick={() => transfers.forEach((t) => onDismiss(t.id))}
+            <button onClick={onClear}
               className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]">Clear</button>
           )}
         </div>
         <div className="max-h-64 overflow-y-auto">
-          {transfers.map((t) => <TransferRow key={t.id} t={t}
+          {shown.map((t) => <TransferRow key={t.id} t={t}
             onCancel={() => onCancel(t.id)} onDismiss={() => onDismiss(t.id)} />)}
         </div>
       </div>
@@ -127,7 +131,7 @@ function TransferWidget({ transfers, onCancel, onDismiss }: {
   );
 }
 
-function TransferRow({ t, onCancel, onDismiss }: {
+export function TransferRow({ t, onCancel, onDismiss }: {
   t: Transfer; onCancel: () => void; onDismiss: () => void;
 }) {
   const pct = t.size > 0 ? Math.min(100, (t.received / t.size) * 100) : 0;
@@ -135,11 +139,11 @@ function TransferRow({ t, onCancel, onDismiss }: {
   return (
     <div className="border-b border-[var(--color-border)] px-3 py-2.5 last:border-0">
       <div className="flex items-center gap-2">
+        <Icon size={13} className={t.status === "active" ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
         <FileIcon name={t.name} size={14} />
         <span className="min-w-0 flex-1 truncate text-xs font-medium">{t.name}</span>
         {t.status === "active" && (
           <span className="flex items-center gap-1 text-[10px] text-[var(--color-text-dim)]">
-            <Icon size={11} className="pulse-dot" />
             {t.size > 0 ? `${formatBytes(t.received)} / ${formatBytes(t.size)}` : formatBytes(t.received)}
           </span>
         )}
