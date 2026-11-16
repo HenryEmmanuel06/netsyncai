@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+*.spec.bak
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Agent runtime data
+*.db
+*.db-journal
+.netsync-partial/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Inno Setup output
+installer/Output/

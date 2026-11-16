@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0f0f13;
+  --color-surface: #16161d;
+  --color-surface-2: #1d1d27;
+  --color-border: #2a2a38;
+  --color-primary: #8b5cf6;
+  --color-primary-hover: #7c4dff;
+  --color-text: #e7e7ee;
+  --color-text-dim: #9b9bab;
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+}
