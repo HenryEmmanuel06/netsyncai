@@ -41,6 +41,7 @@ class SupabaseDeviceStore:
                 "SupabaseDeviceStore requires SUPABASE_URL and "
                 "SUPABASE_SERVICE_ROLE_KEY"
             )
+        self._ensured: set[str] = set()
         self._client = httpx.AsyncClient(
             base_url=f"{settings.supabase_url.rstrip('/')}/rest/v1",
             headers={
@@ -51,6 +52,19 @@ class SupabaseDeviceStore:
             },
             timeout=10.0,
         )
+
+    async def ensure_profile(self, user_id: str, email: str) -> None:
+        """Upsert the profiles row once per user — accounts created before
+        the auth trigger existed would otherwise 409 on every FK'd write."""
+        if user_id in self._ensured:
+            return
+        r = await self._client.post(
+            "/profiles",
+            headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
+            json={"id": user_id, "email": email},
+        )
+        r.raise_for_status()
+        self._ensured.add(user_id)
 
     # ── registry ──
 

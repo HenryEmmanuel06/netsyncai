@@ -127,6 +127,7 @@ class DeviceStore(Protocol):
         ...
     async def get_preferences(self, user_id: str) -> dict: ...
     async def set_preferences(self, user_id: str, prefs: dict) -> dict: ...
+    async def ensure_profile(self, user_id: str, email: str) -> None: ...
 
 
 class InMemoryDeviceStore:
@@ -274,6 +275,9 @@ class InMemoryDeviceStore:
         cur.update({k: v for k, v in prefs.items() if k in cur})
         self._prefs[user_id] = cur
         return cur
+
+    async def ensure_profile(self, user_id: str, email: str) -> None:
+        pass  # in-memory store has no FK constraints
 
     async def redeem_pairing(
         self, code: str, agent_version: str | None
