@@ -1,4 +1,4 @@
-# NetSync AI
+# NetSync AIs
 
 AI-driven multi-agent distributed file management and synchronization platform.
 B.Sc. final-year project: *Design and Implementation of an AI-Driven
