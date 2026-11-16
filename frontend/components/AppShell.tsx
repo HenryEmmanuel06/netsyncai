@@ -11,6 +11,7 @@ import { apiFetch, API_URL } from "@/lib/api";
 import { useAuth, type Auth } from "@/lib/useAuth";
 import { initials } from "@/lib/format";
 import { StatusDot } from "@/components/ui";
+import { TransferProvider } from "@/components/TransferCenter";
 import type { Device } from "@/types";
 
 const NAV = [
@@ -171,6 +172,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <TransferProvider>
+      <AppShell>{children}</AppShell>
+    </TransferProvider>
+  );
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const auth = useAuth();
   if (!auth.configured) {
@@ -190,7 +199,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  return <AppShell>{children}</AppShell>;
+  return <Shell>{children}</Shell>;
 }
 
 export type { Auth };

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
+import { useTransfers } from "@/components/TransferCenter";
 import {
   ConfirmDialog, EmptyState, FileIcon, Modal, PageHeader, Spinner, StatusDot,
 } from "@/components/ui";
@@ -32,6 +33,7 @@ function filesFetch<T>(path: string, token: string, init?: RequestInit) {
 function FilesInner() {
   const params = useSearchParams();
   const { token } = useAuth();
+  const transfers = useTransfers();
   const [pickers, setPickers] = useState<Picker[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [roots, setRoots] = useState<Root[]>([]);
@@ -181,17 +183,27 @@ function FilesInner() {
   }
 
   async function doUpload(fileList: FileList | null) {
-    if (!picker || !fileList?.length) return;
+    if (!picker || !fileList?.length || !token) return;
     setUploading(true);
+    const base = process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000";
     try {
       for (const f of Array.from(fileList)) {
-        const fd = new FormData();
-        fd.append("file", f, f.name);
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000"}/api/v1/devices/${picker.deviceId}/upload?path=${encodeURIComponent(path)}`,
-          { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd },
-        );
-        if (!res.ok) throw new Error(`upload ${f.name} failed`);
+        const t = transfers.begin(f.name, f.size, "up");
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST",
+            `${base}/api/v1/devices/${picker.deviceId}/upload?path=${encodeURIComponent(path)}`);
+          xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+          xhr.upload.onprogress = (ev) => transfers.progress(t.id, ev.loaded);
+          xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`upload failed (${xhr.status})`)));
+          xhr.onerror = () => reject(new Error("upload failed"));
+          const abort = () => { xhr.abort(); reject(new DOMException("aborted", "AbortError")); };
+          t.signal.addEventListener("abort", abort, { once: true });
+          const fd = new FormData();
+          fd.append("file", f, f.name);
+          xhr.send(fd);
+        }).then(() => transfers.finish(t.id))
+          .catch((err) => { if (!t.signal.aborted) transfers.fail(t.id, err instanceof Error ? err.message : "failed"); });
       }
       browse(picker.deviceId, path);
     } finally { setUploading(false); }
@@ -200,15 +212,32 @@ function FilesInner() {
   async function download(e: RemoteFileEntry) {
     if (!picker || !token) return;
     const base = process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000";
-    const res = await fetch(
-      `${base}/api/v1/devices/${picker.deviceId}/download?path=${encodeURIComponent(e.path ?? e.rel_path)}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!res.ok) { setError("download failed"); return; }
-    const url = URL.createObjectURL(await res.blob());
-    const a = document.createElement("a");
-    a.href = url; a.download = e.name; a.click();
-    URL.revokeObjectURL(url);
+    const t = transfers.begin(e.name, e.size ?? 0, "down");
+    try {
+      const res = await fetch(
+        `${base}/api/v1/devices/${picker.deviceId}/download?path=${encodeURIComponent(e.path ?? e.rel_path)}`,
+        { headers: { Authorization: `Bearer ${token}` }, signal: t.signal },
+      );
+      if (!res.ok || !res.body) throw new Error(`download failed (${res.status})`);
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        transfers.progress(t.id, received);
+      }
+      const url = URL.createObjectURL(new Blob(chunks as BlobPart[]));
+      const a = document.createElement("a");
+      a.href = url; a.download = e.name; a.click();
+      URL.revokeObjectURL(url);
+      transfers.finish(t.id);
+    } catch (err) {
+      if (t.signal.aborted) return; // row already marked cancelled
+      transfers.fail(t.id, err instanceof Error ? err.message : "download failed");
+    }
   }
 
   async function saveTag() {
