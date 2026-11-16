@@ -46,6 +46,18 @@ def _jwt_secret(monkeypatch):
     monkeypatch.setattr(settings, "device_store", "memory")
 
 
+@pytest.fixture(autouse=True)
+def _clean_store():
+    """The in-memory store is a process singleton — reset between tests."""
+    from app.api import deps
+
+    store = deps._memory_store
+    for attr in ("_devices", "_sessions", "_pairing", "_credentials", "_sync"):
+        if hasattr(store, attr):
+            getattr(store, attr).clear()
+    yield
+
+
 @pytest.fixture
 def auth_headers():
     return {"Authorization": f"Bearer {make_token()}"}

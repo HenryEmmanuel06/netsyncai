@@ -84,6 +84,11 @@ async def _run_command(ctx, env: Envelope, send) -> None:
     await send(Envelope(type=MessageType.COMMAND_RESULT, payload=payload).model_dump_json())
 
 
+def _watch_task(t: asyncio.Task) -> None:
+    if not t.cancelled() and (exc := t.exception()):
+        log.error("handler task failed: %s", exc)
+
+
 TRANSFER_TYPES = {
     MessageType.TRANSFER_BEGIN, MessageType.TRANSFER_CHUNK,
     MessageType.TRANSFER_END, MessageType.TRANSFER_ABORT,
@@ -100,6 +105,7 @@ async def _handle_message(raw: str, send, ctx=None, tasks=None) -> None:
             t = asyncio.create_task(_run_command(ctx, env, send))
             if tasks is not None:
                 tasks.add(t)
+                t.add_done_callback(_watch_task)
                 t.add_done_callback(tasks.discard)
         else:
             await send(Envelope(
@@ -115,6 +121,22 @@ async def _handle_message(raw: str, send, ctx=None, tasks=None) -> None:
         if ctx is not None:
             state = ctx.transfer_state(env.payload["transfer_id"])
             await state.queue.put(env)
+    elif env.type is MessageType.SYNC_EVENT:
+        if ctx is not None:
+            # task: _apply_write blocks on transfer chunks, which only
+            # flow while the read loop stays free
+            t = asyncio.create_task(ctx.sync.on_sync_event(env))
+            if tasks is not None:
+                tasks.add(t)
+                t.add_done_callback(_watch_task)
+                t.add_done_callback(tasks.discard)
+    elif env.type is MessageType.SYNC_REQUEST:
+        if ctx is not None:
+            t = asyncio.create_task(ctx.sync.on_sync_request(env))
+            if tasks is not None:
+                tasks.add(t)
+                t.add_done_callback(_watch_task)
+                t.add_done_callback(tasks.discard)
     elif env.type is MessageType.ERROR:
         log.warning("coordinator error: %s", env.payload)
 
@@ -152,8 +174,11 @@ async def run_session(
 
         ctx = None
         if conn is not None:
-            from file_operations.ops import AgentContext
+            from file_operations.ops import AgentContext, HANDLERS
+            from synchronization.sync_engine import SYNC_HANDLERS, SyncEngine
             ctx = AgentContext(conn, ws.send)
+            ctx.sync = SyncEngine(ctx, device_id)
+            HANDLERS.update(SYNC_HANDLERS)
 
         hb = asyncio.create_task(_heartbeat(ws, device_id))
         tasks: set = set()
@@ -167,6 +192,8 @@ async def run_session(
             hb.cancel()
             for t in tasks:
                 t.cancel()
+            if ctx is not None:
+                ctx.sync.stop_all()
 
 
 async def run_forever(

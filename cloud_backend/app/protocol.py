@@ -31,6 +31,9 @@ class MessageType(str, Enum):
     TRANSFER_CHUNK = "transfer.chunk"
     TRANSFER_END = "transfer.end"
     TRANSFER_ABORT = "transfer.abort"
+    # sync (agent -> cloud -> peer agent)
+    SYNC_EVENT = "sync.event"
+    SYNC_REQUEST = "sync.request"
     # bidirectional
     ERROR = "error"
     PING = "ping"
@@ -118,6 +121,46 @@ class TransferEnd(BaseModel):
 class TransferAbort(BaseModel):
     transfer_id: str
     reason: str
+
+
+# ── synchronization ──────────────────────────────────────────────────────────
+# File content rides the TRANSFER_* envelopes; meta.dest_device tells the
+# coordinator to forward chunks to a specific agent instead of a REST queue.
+
+class SyncOpType(str, Enum):
+    SNAPSHOT = "snapshot"     # full listing (initial sync)
+    CREATE = "create"
+    MODIFY = "modify"
+    DELETE = "delete"
+    RENAME = "rename"
+
+
+class SyncEvent(BaseModel):
+    """Agent -> coordinator -> peer agent."""
+    session_id: str
+    op_id: str                      # uuid — dedupe + loop prevention
+    op: SyncOpType
+    rel_path: str                   # relative to the sync root
+    sha256: str | None = None
+    size: int = 0
+    mtime: float = 0.0
+    from_device: str
+    # op-specific extras
+    entries: list[dict[str, Any]] = Field(default_factory=list)  # SNAPSHOT
+    old_rel_path: str | None = None                              # RENAME
+
+
+class SyncRequest(BaseModel):
+    """Peer asks the origin device to stream a file for an op.
+
+    Routed by the coordinator to `origin_device` (which streams chunks
+    back with meta.dest_device = `to_device` = the requester)."""
+    session_id: str
+    op_id: str
+    rel_path: str
+    transfer_id: str
+    origin_device: str              # holds the file; receives this request
+    to_device: str                  # requester; receives the chunks
 
 
 # permission bits — mirrors supabase migration comment

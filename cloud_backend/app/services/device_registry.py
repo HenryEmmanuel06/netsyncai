@@ -67,6 +67,15 @@ class DeviceStore(Protocol):
     ) -> None: ...
     async def agent_disconnected(self, device_id: str) -> None: ...
 
+    # ── sync sessions ──
+    async def create_sync(
+        self, owner_id: str, a_device_id: str, a_path: str,
+        b_device_id: str, b_path: str, mode: str,
+    ) -> dict: ...
+    async def list_sync(self, owner_id: str) -> list[dict]: ...
+    async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict: ...
+    async def get_sync_participants(self, session_id: str) -> list[dict]: ...
+
 
 class InMemoryDeviceStore:
     """Deterministic store for unit tests and local dev."""
@@ -200,3 +209,63 @@ class InMemoryDeviceStore:
         self._sessions.pop(device_id, None)
         if device_id in self._devices:
             self._devices[device_id]["status"] = "offline"
+
+    # ── sync sessions ──
+
+    async def create_sync(
+        self, owner_id: str, a_device_id: str, a_path: str,
+        b_device_id: str, b_path: str, mode: str,
+    ) -> dict:
+        session_id = str(uuid.uuid4())
+        session = {
+            "id": session_id,
+            "name": f"{a_path} ↔ {b_path}",
+            "mode": mode,
+            "state": "active",
+            "created_by": owner_id,
+            "created_at": _now(),
+            "participants": [
+                {"device_id": a_device_id, "root": a_path},
+                {"device_id": b_device_id, "root": b_path},
+            ],
+        }
+        if not hasattr(self, "_sync"):
+            self._sync = {}
+        self._sync[session_id] = session
+        return {k: v for k, v in session.items()}
+
+    async def list_sync(self, owner_id: str) -> list[dict]:
+        return [
+            s for s in getattr(self, "_sync", {}).values()
+            if s["created_by"] == owner_id
+        ]
+
+    async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict:
+        s = getattr(self, "_sync", {}).get(session_id)
+        if not s or s["created_by"] != owner_id:
+            raise DeviceNotFound(session_id)
+        s["state"] = state
+        return s
+
+    async def get_sync_participants(self, session_id: str) -> list[dict]:
+        s = getattr(self, "_sync", {}).get(session_id)
+        return s["participants"] if s else []
+
+    async def get_active_syncs_for_device(self, device_id: str) -> list[dict]:
+        """Active sessions this device participates in — used to re-issue
+        start_sync after an agent reconnects."""
+        out = []
+        for s in getattr(self, "_sync", {}).values():
+            if s["state"] != "active":
+                continue
+            for p in s["participants"]:
+                if p["device_id"] == device_id:
+                    peer = next(
+                        q["device_id"] for q in s["participants"]
+                        if q["device_id"] != device_id
+                    )
+                    out.append({
+                        "session_id": s["id"], "root": p["root"],
+                        "peer_device_id": peer, "mode": s["mode"],
+                    })
+        return out

@@ -103,6 +103,17 @@ CREATE TABLE IF NOT EXISTS transfer_checkpoints (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Last-synced state per file per session — the "base" version used for
+-- conflict detection (local sha != base && remote sha != base => conflict).
+CREATE TABLE IF NOT EXISTS sync_state (
+  session_id TEXT NOT NULL,
+  rel_path   TEXT NOT NULL,
+  sha256     TEXT NOT NULL,
+  mtime      REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (session_id, rel_path)
+);
+
 CREATE TABLE IF NOT EXISTS agent_settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

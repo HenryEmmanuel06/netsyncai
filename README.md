@@ -67,15 +67,25 @@ Apply migrations in order under `supabase/migrations/` (e.g. via
 
 ## Limitations (Phase 1)
 
-Implemented and tested: monorepo, DB schema + RLS, backend health/auth/JWT,
-device registry, pairing codes + agent WebSocket + live presence (Phase 2),
-**remote file management** (Phase 3): browse/search/rename/move/copy/mkdir/
-delete dispatched over WSS with agent-side path security + per-folder
-access levels, chunked base64 transfers with SHA-256 verification + atomic
-writes + collision renaming, Network Files UI.
+Implemented and tested (Phases 1–5):
 
-Transfer transport is currently the coordinator relay (works through any
-NAT); direct LAN P2P is designed but deferred.
+- **Backend**: health/auth/JWT, device registry, pairing codes, agent WSS +
+  live presence, command dispatch, file ops API (browse/search/rename/move/
+  copy/mkdir/delete + streaming download/upload), sync session management +
+  event routing, AI task endpoint (Gemini → validated plan → dispatch)
+- **Agent**: SQLite index + FTS5 + path security, persistent daemon with
+  reconnect, all file-op handlers, per-folder access levels, bidirectional
+  sync engine (watchdog + journal dedupe + conflict detection + SHA-256
+  transfers + atomic writes)
+- **Frontend**: auth, Devices (pairing + live status), Network Files,
+  Sync dashboard, AI Assistant
+- **Verified e2e**: two real agents over a real backend — full file-op
+  roundtrip AND live bidirectional sync (create/modify/delete/pause/resume)
+- **Packaging**: `desktop_agent/dist/netsync-agent.exe` (PyInstaller)
 
-Not yet implemented: multi-user permission grants UI, sync engine, AI task
-planning, document conversion, tray UI, installer build, deployments.
+Not yet implemented: multi-user folder sharing UI, direct LAN P2P
+transport (relay used everywhere), document conversion, tray app, offline
+sync queue (session rejoin works, missed events converge via snapshot),
+installer exe (spec ready).
+
+See `docs/DEPLOYMENT.md` for hosting instructions.

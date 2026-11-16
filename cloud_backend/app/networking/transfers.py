@@ -20,6 +20,7 @@ from app.protocol import (
 )
 
 _queues: dict[str, asyncio.Queue] = {}
+_routes: dict[str, str] = {}   # transfer_id -> dest device_id (agent→agent)
 CHUNK_SIZE = 64 * 1024
 
 
@@ -33,10 +34,29 @@ def unregister(transfer_id: str) -> None:
     _queues.pop(transfer_id, None)
 
 
-async def route(env: Envelope) -> None:
-    """ws_agent feeds every TRANSFER_* envelope here."""
+async def route(env: Envelope, raw: str | None = None) -> None:
+    """ws_agent feeds every TRANSFER_* envelope here.
+
+    If TRANSFER_BEGIN.meta.dest_device names a device, this transfer is
+    agent→agent (sync): chunks get forwarded to that device's socket.
+    Otherwise they land in the REST-facing queue for downloads/uploads.
+    """
+    from app.networking.connections import manager
+
     payload = env.payload
     tid = payload.get("transfer_id")
+    if env.type is MessageType.TRANSFER_BEGIN:
+        dest = payload.get("meta", {}).get("dest_device")
+        if dest:
+            _routes[tid] = dest
+            await manager.send(dest, raw or env.model_dump_json())
+            return
+    dest = _routes.get(tid)
+    if dest:
+        await manager.send(dest, raw or env.model_dump_json())
+        if env.type in (MessageType.TRANSFER_END, MessageType.TRANSFER_ABORT):
+            _routes.pop(tid, None)
+        return
     q = _queues.get(tid)
     if q is not None:
         await q.put(env)

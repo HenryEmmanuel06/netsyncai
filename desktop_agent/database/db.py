@@ -39,6 +39,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE indexed_folders ADD COLUMN access TEXT NOT NULL DEFAULT 'read'"
         )
         conn.commit()
+    # sync_state added in Phase 4 — CREATE IF NOT EXISTS covers it via
+    # _apply_schema, nothing else needed
 
 
 def _apply_schema(conn: sqlite3.Connection) -> None:

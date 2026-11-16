@@ -15,11 +15,42 @@ export interface Device {
 }
 
 export interface RemoteFileEntry {
-  file_id: string;
+  file_id?: string;
   rel_path: string;
   name: string;
-  ext: string;
-  size: number;
-  mtime: number;
+  ext?: string | null;
+  size?: number | null;
+  mtime?: number | null;
   is_dir?: boolean;
+}
+
+export interface SyncParticipant {
+  device_id: string;
+  root: string;
+}
+
+export interface SyncSession {
+  id: string;
+  name: string;
+  mode: string;
+  state: string;
+  created_by: string;
+  participants: SyncParticipant[];
+}
+
+export interface TaskStep {
+  device: string | null;
+  tool: string;
+  args: Record<string, unknown>;
+  description: string | null;
+  ok?: boolean | null;
+  result?: unknown;
+  error?: string | null;
+}
+
+export interface TaskResult {
+  summary: string | null;
+  needs_confirmation: boolean;
+  executed: boolean;
+  steps: TaskStep[];
 }

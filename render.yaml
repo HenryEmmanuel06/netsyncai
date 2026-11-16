@@ -1,0 +1,25 @@
+# Render Blueprint — https://render.com → New → Blueprint
+services:
+  - type: web
+    name: netsync-cloud
+    runtime: python
+    rootDir: cloud_backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DEVICE_STORE
+        value: supabase
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash-lite
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -22,6 +23,7 @@ from app.schemas.devices import DeviceResponse
 from app.services.device_registry import DeviceNotFound, DeviceStore
 from app.protocol import (
     AgentHello,
+    CommandDispatch,
     Envelope,
     ErrorPayload,
     MessageType,
@@ -84,6 +86,19 @@ async def agent_socket(
         await ws.send_text(_env(MessageType.PONG, {"session": "ready"}))
         log.info("device %s connected (%s)", device.id, device.name)
 
+        # re-issue active sync sessions — agents drop watchers on disconnect
+        for s in await store.get_active_syncs_for_device(device.id):
+            try:
+                await manager.send(device.id, _env(
+                    MessageType.COMMAND_DISPATCH,
+                    CommandDispatch(
+                        task_id="sync-rejoin", step_id=str(uuid.uuid4()),
+                        tool="start_sync", args=s,
+                    ).model_dump(),
+                ))
+            except Exception:
+                pass
+
         while True:
             raw = await ws.receive_text()
             env = Envelope.model_validate_json(raw)
@@ -102,7 +117,14 @@ async def agent_socket(
                 MessageType.TRANSFER_END,
                 MessageType.TRANSFER_ABORT,
             ):
-                await transfers.route(env)
+                await transfers.route(env, raw)
+            elif env.type is MessageType.SYNC_EVENT:
+                # relay to every other participant device in the session
+                for p in await store.get_sync_participants(env.payload["session_id"]):
+                    if p["device_id"] != env.payload["from_device"]:
+                        await manager.send(p["device_id"], raw)
+            elif env.type is MessageType.SYNC_REQUEST:
+                await manager.send(env.payload["origin_device"], raw)
             else:
                 await ws.send_text(_env(
                     MessageType.ERROR,

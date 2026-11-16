@@ -23,3 +23,7 @@ def http_404(message: str) -> HTTPException:
 
 def http_409(message: str) -> HTTPException:
     return _err(status.HTTP_409_CONFLICT, message)
+
+
+def http_422(message: str) -> HTTPException:
+    return _err(status.HTTP_422_UNPROCESSABLE_ENTITY, message)
