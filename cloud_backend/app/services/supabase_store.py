@@ -608,14 +608,20 @@ class SupabaseDeviceStore:
             return str(uuid.UUID(subject))
         except ValueError:
             pass
-        r = await self._client.get(
-            "/profiles",
-            params={
-                "or": f"(email.eq.{subject},handle.eq.{subject.lstrip('@')})",
-                "discoverable": "eq.true",  # opt-out hides email/handle lookup
-                "select": "id",
-            },
-        )
+        if "@" in subject and not subject.startswith("@"):
+            # exact email: knowing it is consent enough (like Google Docs)
+            r = await self._client.get(
+                "/profiles", params={"email": f"eq.{subject}", "select": "id"})
+        else:
+            # @handle is a discovery namespace — honors the opt-out flag
+            r = await self._client.get(
+                "/profiles",
+                params={
+                    "handle": f"eq.{subject.lstrip('@')}",
+                    "discoverable": "eq.true",
+                    "select": "id",
+                },
+            )
         r.raise_for_status()
         rows = r.json()
         return rows[0]["id"] if rows else None
