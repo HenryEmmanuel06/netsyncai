@@ -26,7 +26,9 @@ export async function apiFetch<T>(
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.detail?.error ?? `request failed: ${res.status}`);
   }
-  return res.json() as Promise<T>;
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 export { API_URL };
