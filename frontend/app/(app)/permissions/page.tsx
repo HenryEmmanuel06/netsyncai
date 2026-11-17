@@ -292,7 +292,7 @@ export default function PermissionsPage() {
         <div className="card mb-4 px-4 py-3 text-sm text-[var(--color-danger)]">{error}</div>
       )}
 
-      <div className="mb-4 flex gap-1 rounded-lg bg-[var(--color-surface-2)] p-1 w-fit">
+      <div className="segmented mb-5">
         <button className={`tab ${tab === "folders" ? "tab-active" : ""}`}
           onClick={() => setTab("folders")}>Shared Folders</button>
         <button className={`tab ${tab === "requests" ? "tab-active" : ""}`}

@@ -11,7 +11,7 @@ import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { useTransfers } from "@/components/TransferCenter";
 import {
-  ConfirmDialog, EmptyState, FileIcon, Modal, PageHeader, Spinner, StatusDot,
+  ConfirmDialog, EmptyState, FileIcon, FolderArt, Modal, PageHeader, Spinner, StatusDot,
 } from "@/components/ui";
 import { basename, formatBytes, formatDate, parentPath } from "@/lib/format";
 import type { Device, RemoteFileEntry, SharedFolder } from "@/types";
@@ -518,26 +518,33 @@ function FilesInner() {
               picker?.shared ? "" : "No shared folders yet — add one under Devices → Folders."}
           </div>
         ) : viewMode === "grid" ? (
-          <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3 xl:grid-cols-4">
             {entries.map((e) => {
               const p = e.path ?? e.rel_path;
               const dir = !!e.is_dir;
               return (
                 <div key={p}
-                  className="group relative rounded-lg border border-[var(--color-border)] p-3 transition-colors hover:border-[var(--color-accent)]">
-                  <div className="relative flex justify-end">
-                    <button className="btn btn-ghost absolute -right-1 -top-1 !p-1 opacity-0 transition-opacity group-hover:opacity-100"
+                  className="group relative overflow-visible rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all hover:border-[var(--color-border-strong)] hover:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.7)]">
+                  <div className="absolute right-1.5 top-1.5 z-10">
+                    <button className="icon-btn !h-7 !w-7 opacity-0 transition-opacity group-hover:opacity-100"
                       onClick={() => setMenu(menu === p ? null : p)}>···</button>
                     {menu === p && entryMenu(e, p, dir)}
                   </div>
-                  <button className="flex w-full flex-col items-center gap-2"
+                  <button className="flex w-full flex-col items-center px-3 pb-3.5 pt-5"
                     onClick={() => dir ? open(e) : download(e)}>
-                    <FileIcon name={e.name} isDir={dir} size={30} />
-                    <span className="w-full truncate text-center text-xs font-medium">{e.name}</span>
-                    <span className="text-[10px] text-[var(--color-text-dim)]">
-                      {dir ? "folder" : formatBytes(e.size ?? 0)}
+                    <div className="flex h-[60px] items-center transition-transform duration-200 group-hover:-translate-y-0.5 group-hover:scale-[1.04]">
+                      {dir ? <FolderArt size={64} /> : <FileIcon name={e.name} size={48} />}
+                    </div>
+                    <span className="mt-3 w-full truncate text-center text-[13px] font-medium">{e.name}</span>
+                    <span className="pill mt-1.5">
+                      {dir ? "Folder" : formatBytes(e.size ?? 0)}
                     </span>
                   </button>
+                  {(tags[p] ?? []).length > 0 && (
+                    <div className="flex flex-wrap justify-center gap-1 border-t border-[var(--color-border)] px-2 py-2">
+                      {(tags[p] ?? []).slice(0, 3).map((t) => <span key={t} className="chip">{t}</span>)}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -31,7 +31,7 @@ export default function TransfersPage() {
         }
       />
 
-      <div className="mb-4 flex gap-1 rounded-lg bg-[var(--color-surface-2)] p-1 w-fit">
+      <div className="segmented mb-5">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`tab ${tab === t.key ? "tab-active" : ""}`}>

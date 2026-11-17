@@ -80,7 +80,7 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
         </div>
       )}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-dim)]">
-        {AGENT_DOWNLOAD_URL ? "2." : "1."} Name the computer â€” the name is
+        {AGENT_DOWNLOAD_URL ? "2." : "1."} Name the computer — the name is
         what you'll see across NetSync.
       </div>
       <div className="mt-3 flex gap-2">
@@ -97,7 +97,7 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
       {code && (
         <div className="fade-up mt-4">
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-dim)]">
-            {AGENT_DOWNLOAD_URL ? "3." : "2."} Approve on that computer â€”
+            {AGENT_DOWNLOAD_URL ? "3." : "2."} Approve on that computer —
             click below if the app is already installed there:
           </div>
           <div className="mt-3 flex items-center justify-center gap-3">
@@ -116,7 +116,7 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
             <Monitor size={15} /> Open on the other computer (approve)
           </a>
           <p className="mt-2 text-center text-[11px] text-[var(--color-text-dim)]">
-            The link opens the app with the code filled in â€” the person at that
+            The link opens the app with the code filled in — the person at that
             computer confirms. Valid for 10 minutes.
           </p>
         </div>
@@ -203,7 +203,7 @@ function FolderManager({ device, token, onClose }: {
   }
 
   return (
-    <Modal title={`Shared folders â€” ${device.name}`} onClose={onClose} wide>
+    <Modal title={`Shared folders — ${device.name}`} onClose={onClose} wide>
       <p className="-mt-2 mb-4 text-xs text-[var(--color-text-dim)]">
         Folders listed here are browsable (and writable with read & write) by
         you and anyone you grant on the Permissions page.
@@ -220,8 +220,8 @@ function FolderManager({ device, token, onClose }: {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{f.label || basename(f.path)}</div>
                 <div className="truncate text-xs text-[var(--color-text-dim)]">
-                  {f.path} Â· {f.file_count} files Â· {formatBytes(f.total_size)}
-                  {f.indexing ? " Â· indexingâ€¦" : ""}
+                  {f.path} · {f.file_count} files · {formatBytes(f.total_size)}
+                  {f.indexing ? " · indexing…" : ""}
                 </div>
               </div>
               <select className="input !py-1 text-xs" value={f.access}
@@ -310,7 +310,7 @@ function FolderManager({ device, token, onClose }: {
       {confirmRemove && (
         <ConfirmDialog
           title="Stop sharing this folder?"
-          body={`â€œ${confirmRemove.path}â€ will no longer be browsable remotely. The files themselves are not deleted.`}
+          body={`“${confirmRemove.path}” will no longer be browsable remotely. The files themselves are not deleted.`}
           confirmLabel="Stop sharing" danger
           onConfirm={() => remove(confirmRemove)}
           onCancel={() => setConfirmRemove(null)}
@@ -394,7 +394,7 @@ export default function DevicesPage() {
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--color-text-dim)]">
-                <div>{d.platform} · Agent {d.agent_version ?? "â€”"}</div>
+                <div>{d.platform} · Agent {d.agent_version ?? "—"}</div>
                 <div>Added {formatDate(d.created_at)}</div>
               </div>
               {d.status === "online" && <DriveStats deviceId={d.id} token={token!} />}
@@ -422,7 +422,7 @@ export default function DevicesPage() {
       {revoking && (
         <ConfirmDialog
           title={`Remove ${revoking.name}?`}
-          body="The app on that computer will be disconnected and show â€œremoved from accountâ€. You can pair it again later."
+          body="The app on that computer will be disconnected and show “removed from account”. You can pair it again later."
           confirmLabel="Remove device" danger
           onConfirm={() => revoke(revoking)}
           onCancel={() => setRevoking(null)}
