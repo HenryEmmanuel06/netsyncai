@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowUp, Ban, Check, Eye, FileText, Folder, FolderPlus, Inbox, Pencil,
+  ArrowUp, Ban, Check, Eye, FileText, Folder, FolderPlus, Inbox, Lock, Pencil,
   RefreshCw, Search, ShieldCheck, UserPlus, X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -26,6 +26,23 @@ interface AccessRequest {
 }
 
 interface BlockedUser { user_id: string; email?: string | null }
+
+/** A folder shared on one of your devices (via the Devices page), merged
+ *  with its backend share record when one exists. Share records are what
+ *  grants attach to — a root without one gets it lazily on first grant. */
+interface PermFolder {
+  key: string;
+  deviceId: string;
+  deviceName: string;
+  path: string;
+  label: string;
+  access?: string;          // undefined = can't verify (device offline)
+  indexing?: boolean;
+  share?: SharedFolder;
+}
+
+const normPath = (p: string) =>
+  p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
 
 const ROLES = [
   { key: "viewer", label: "Viewer", icon: Eye,
@@ -128,7 +145,8 @@ export default function PermissionsPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [owned, setOwned] = useState<SharedFolder[]>([]);
   const [granted, setGranted] = useState<SharedFolder[]>([]);
-  const [selected, setSelected] = useState<SharedFolder | null>(null);
+  const [roots, setRoots] = useState<Record<string, SharedFolderInfo[] | null>>({});
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [grants, setGrants] = useState<GrantEntry[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [subject, setSubject] = useState("");
@@ -154,9 +172,19 @@ export default function PermissionsPage() {
       apiFetch<Device[]>("/api/v1/devices", token),
       apiFetch<{ owned: SharedFolder[]; granted: SharedFolder[] }>("/api/v1/sharing", token),
     ]);
-    setDevices(devs.filter((d) => !d.revoked_at));
+    const active = devs.filter((d) => !d.revoked_at);
+    setDevices(active);
     setOwned(shares.owned);
     setGranted(shares.granted);
+    setRoots(Object.fromEntries(await Promise.all(active.map(async (d) => {
+      try {
+        const r = await apiFetch<{ folders: SharedFolderInfo[] }>(
+          `/api/v1/devices/${d.id}/folders`, token);
+        return [d.id, r.folders ?? []] as const;
+      } catch {
+        return [d.id, null] as const;   // offline — roots can't be verified
+      }
+    }))));
     const [req, bl] = await Promise.all([
       apiFetch<{ incoming: AccessRequest[]; outgoing: AccessRequest[] }>(
         "/api/v1/sharing/requests", token).catch(() => null),
@@ -169,11 +197,45 @@ export default function PermissionsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  /** Folders the user shared on their devices, merged with share records. */
+  const folders = useMemo<PermFolder[]>(() => {
+    const out: PermFolder[] = [];
+    const matched = new Set<string>();
+    for (const d of devices) {
+      for (const r of roots[d.id] ?? []) {
+        const share = owned.find(
+          (s) => s.device_id === d.id && normPath(s.root_path) === normPath(r.path));
+        if (share) matched.add(share.id);
+        out.push({
+          key: `f:${d.id}:${normPath(r.path)}`,
+          deviceId: d.id, deviceName: d.name, path: r.path,
+          label: r.label || basename(r.path),
+          access: r.access, indexing: r.indexing, share,
+        });
+      }
+    }
+    // Share records we can't verify (device offline) still show so grants
+    // stay manageable; ones a live device says are gone drop out.
+    for (const s of owned) {
+      if (matched.has(s.id) || roots[s.device_id]) continue;
+      out.push({
+        key: `s:${s.id}`, deviceId: s.device_id,
+        deviceName: s.device_name || "your device",
+        path: s.root_path, label: s.label || basename(s.root_path), share: s,
+      });
+    }
+    return out;
+  }, [devices, roots, owned]);
+
+  const selected = folders.find((f) => f.key === selectedKey) ?? null;
+  const selectedReadOnly = selected?.access === "read";
+  const selectedShareId = selected?.share?.id;
+
   useEffect(() => {
-    if (!selected || !token) return;
-    apiFetch<GrantEntry[]>(`/api/v1/sharing/${selected.id}/grants`, token)
+    if (!selectedShareId || !token) { setGrants([]); return; }
+    apiFetch<GrantEntry[]>(`/api/v1/sharing/${selectedShareId}/grants`, token)
       .then(setGrants).catch(() => setGrants([]));
-  }, [selected, token]);
+  }, [selectedShareId, token]);
 
   async function createShare() {
     if (!pickFolder || !pickDevice) return;
@@ -203,34 +265,64 @@ export default function PermissionsPage() {
 
   async function addGrant() {
     if (!selected || !subject.trim()) return;
-    setBusy(true); setError(null);
     const bits = ROLES.find((r) => r.key === role)!.bits;
+    if (selectedReadOnly && bits & ~3) {
+      setError(`"${selected.label}" was shared with read-only access — switch it to read & write on the Devices page before granting Editor or Manager.`);
+      return;
+    }
+    setBusy(true); setError(null);
     try {
-      await apiFetch(`/api/v1/sharing/${selected.id}/grants`, token!, {
+      // no share record yet → create it so grants have something to attach to
+      let share = selected.share;
+      if (!share) {
+        share = await apiFetch<SharedFolder>("/api/v1/sharing", token!, {
+          method: "POST",
+          body: JSON.stringify({
+            device_id: selected.deviceId, root_path: selected.path,
+            label: selected.label,
+          }),
+        });
+      }
+      await apiFetch(`/api/v1/sharing/${share.id}/grants`, token!, {
         method: "POST",
         body: JSON.stringify({ subject: subject.trim(), permissions: bits }),
       });
-      setSubject(""); setAddOpen(false);
-      const g = await apiFetch<GrantEntry[]>(`/api/v1/sharing/${selected.id}/grants`, token!);
-      setGrants(g);
+      setSubject(""); setAddOpen(false); setRole("viewer");
       await load();
+      const g = await apiFetch<GrantEntry[]>(`/api/v1/sharing/${share.id}/grants`, token!);
+      setGrants(g);
     } catch (e) { setError(e instanceof Error ? e.message : "grant failed"); }
     finally { setBusy(false); }
   }
 
   async function changeRole(g: GrantEntry, next: string) {
-    await apiFetch(`/api/v1/sharing/${selected!.id}/grants/${g.id}`, token!, { method: "DELETE" });
+    if (!selected?.share) return;
+    const shareId = selected.share.id;
     const bits = ROLES.find((r) => r.key === next)!.bits;
-    await apiFetch(`/api/v1/sharing/${selected!.id}/grants`, token!, {
-      method: "POST",
-      body: JSON.stringify({ subject: g.subject_user_id, permissions: bits }),
-    });
-    const g2 = await apiFetch<GrantEntry[]>(`/api/v1/sharing/${selected!.id}/grants`, token!);
+    if (selectedReadOnly && bits & ~3) return;
+    setError(null);
+    await apiFetch(`/api/v1/sharing/${shareId}/grants/${g.id}`, token!, { method: "DELETE" });
+    try {
+      await apiFetch(`/api/v1/sharing/${shareId}/grants`, token!, {
+        method: "POST",
+        body: JSON.stringify({ subject: g.subject_user_id, permissions: bits }),
+      });
+    } catch (e) {
+      // restore the old role so a rejected change doesn't strip access
+      await apiFetch(`/api/v1/sharing/${shareId}/grants`, token!, {
+        method: "POST",
+        body: JSON.stringify({ subject: g.subject_user_id, permissions: g.permissions_granted }),
+      }).catch(() => {});
+      setError(e instanceof Error ? e.message : "could not change role");
+    }
+    const g2 = await apiFetch<GrantEntry[]>(`/api/v1/sharing/${shareId}/grants`, token!)
+      .catch(() => []);
     setGrants(g2);
   }
 
   async function revokeGrant(g: GrantEntry) {
-    await apiFetch(`/api/v1/sharing/${selected!.id}/grants/${g.id}`, token!, { method: "DELETE" });
+    if (!selected?.share) return;
+    await apiFetch(`/api/v1/sharing/${selected.share.id}/grants/${g.id}`, token!, { method: "DELETE" });
     setGrants(grants.filter((x) => x.id !== g.id));
   }
 
@@ -269,12 +361,11 @@ export default function PermissionsPage() {
   async function stopSharing(s: SharedFolder) {
     setConfirmStop(null);
     await apiFetch(`/api/v1/sharing/${s.id}`, token!, { method: "DELETE" });
-    if (selected?.id === s.id) setSelected(null);
     await load();
   }
 
-  const filtered = owned.filter((s) =>
-    (s.label + s.root_path).toLowerCase().includes(filter.toLowerCase()));
+  const filtered = folders.filter((f) =>
+    (f.label + f.path).toLowerCase().includes(filter.toLowerCase()));
 
   return (
     <div>
@@ -288,7 +379,7 @@ export default function PermissionsPage() {
         }
       />
 
-      {error && tab !== "folders" && (
+      {error && !addOpen && !shareOpen && (
         <div className="card mb-4 px-4 py-3 text-sm text-[var(--color-danger)]">{error}</div>
       )}
 
@@ -318,7 +409,10 @@ export default function PermissionsPage() {
                 hint="When someone asks for more access to your folders it shows up here." />
             ) : (
               <div className="card divide-y divide-[var(--color-border)]">
-                {requests.incoming.map((r) => (
+                {requests.incoming.map((r) => {
+                  const reqReadOnly = folders.find(
+                    (f) => f.share?.id === r.folder_id)?.access === "read";
+                  return (
                   <div key={r.id} className="flex items-center gap-3 px-4 py-3">
                     <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs font-bold">
                       {initials(r.requester_email ?? r.requester_id)}
@@ -338,9 +432,13 @@ export default function PermissionsPage() {
                     {r.status === "pending" ? (
                       <>
                         <select className="input !py-1 text-xs capitalize"
-                          value={approveRole[r.id] ?? r.role}
+                          title={reqReadOnly ? "Read-only on the device — only Viewer is allowed" : undefined}
+                          value={reqReadOnly ? "viewer" : approveRole[r.id] ?? r.role}
                           onChange={(e) => setApproveRole({ ...approveRole, [r.id]: e.target.value })}>
-                          {ROLES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+                          {ROLES.map((x) => (
+                            <option key={x.key} value={x.key}
+                              disabled={reqReadOnly && x.key !== "viewer"}>{x.label}</option>
+                          ))}
                         </select>
                         <button className="btn btn-primary !px-3 !py-1.5 text-xs"
                           onClick={() => resolveRequest(r.id, true)}>
@@ -355,7 +453,8 @@ export default function PermissionsPage() {
                       </span>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -444,25 +543,36 @@ export default function PermissionsPage() {
               onChange={(e) => setFilter(e.target.value)} />
           </div>
           <div className="space-y-2">
-            {filtered.map((s) => (
-              <button key={s.id} onClick={() => setSelected(s)}
+            {filtered.map((f) => (
+              <button key={f.key} onClick={() => setSelectedKey(f.key)}
                 className={`card w-full p-3 text-left transition-colors ${
-                  selected?.id === s.id ? "border-[var(--color-primary)]" : "card-hover"
+                  selected?.key === f.key ? "border-[var(--color-primary)]" : "card-hover"
                 }`}>
                 <div className="flex items-center gap-2.5">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[rgba(251,191,36,0.12)]">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[rgba(251,191,36,0.12)]">
                     <FolderPlus size={15} className="text-[var(--color-warn)]" />
                   </span>
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{s.label || basename(s.root_path)}</div>
-                    <div className="truncate text-xs text-[var(--color-text-dim)]">{s.root_path}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{f.label}</div>
+                    <div className="truncate text-xs text-[var(--color-text-dim)]">{f.path}</div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="pill">{f.deviceName}</span>
+                      {f.access === "readwrite" ? (
+                        <span className="badge badge-purple">Full access</span>
+                      ) : f.access === "read" ? (
+                        <span className="badge badge-gray">View only</span>
+                      ) : (
+                        <span className="badge badge-amber">device offline</span>
+                      )}
+                      {f.indexing && <span className="badge badge-amber">indexing…</span>}
+                    </div>
                   </div>
                 </div>
               </button>
             ))}
             {filtered.length === 0 && (
               <EmptyState icon={<FolderPlus size={18} />} title="Nothing shared yet"
-                hint="Share a folder from one of your computers, then grant access to colleagues." />
+                hint="Share a folder from the Devices page (or the button above), then grant colleagues access here." />
             )}
           </div>
 
@@ -502,18 +612,30 @@ export default function PermissionsPage() {
             <div className="card p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold">{selected.label || basename(selected.root_path)}</h2>
+                  <h2 className="text-lg font-semibold">{selected.label}</h2>
                   <div className="mt-0.5 text-xs text-[var(--color-text-dim)]">
-                    {selected.root_path} · on {selected.device_name || "your device"}
+                    {selected.path} · on {selected.deviceName}
+                  </div>
+                  <div className="mt-2">
+                    {selected.access === "readwrite" ? (
+                      <span className="badge badge-purple">Full access on device</span>
+                    ) : selected.access === "read" ? (
+                      <span className="badge badge-gray">Read-only on device</span>
+                    ) : (
+                      <span className="badge badge-amber">Device offline — access unverified</span>
+                    )}
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+                  <button className="btn btn-primary"
+                    onClick={() => { setAddOpen(true); setRole("viewer"); setError(null); }}>
                     <UserPlus size={14} /> Add User
                   </button>
-                  <button className="btn btn-danger" onClick={() => setConfirmStop(selected)}>
-                    Stop Sharing
-                  </button>
+                  {selected.share && (
+                    <button className="btn btn-danger" onClick={() => setConfirmStop(selected.share!)}>
+                      Stop Sharing
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -542,7 +664,12 @@ export default function PermissionsPage() {
                           <select className="input !py-1 text-xs capitalize"
                             value={bitsToRole(g.permissions_granted)}
                             onChange={(e) => changeRole(g, e.target.value)}>
-                            {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                            {ROLES.map((r) => (
+                              <option key={r.key} value={r.key}
+                                disabled={selectedReadOnly && r.key !== "viewer"}>
+                                {r.label}
+                              </option>
+                            ))}
                           </select>
                         </td>
                         <td className="px-4 py-3"><PermBadges bits={g.permissions_granted} /></td>
@@ -570,19 +697,34 @@ export default function PermissionsPage() {
                     placeholder="Colleague's email, @handle, or user ID"
                     onChange={(e) => setSubject(e.target.value)} />
                   <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                    {ROLES.map((r) => (
-                      <button key={r.key} onClick={() => setRole(r.key)}
-                        className={`rounded-lg border p-3 text-left transition-colors ${
-                          role === r.key
-                            ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
-                            : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
-                        }`}>
-                        <r.icon size={15} className={role === r.key ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
-                        <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
-                        <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">{r.desc}</div>
-                      </button>
-                    ))}
+                    {ROLES.map((r) => {
+                      const locked = selectedReadOnly && r.key !== "viewer";
+                      return (
+                        <button key={r.key} disabled={locked} onClick={() => setRole(r.key)}
+                          className={`rounded-lg border p-3 text-left transition-colors ${
+                            role === r.key && !locked
+                              ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
+                              : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+                          } ${locked ? "cursor-not-allowed opacity-45" : ""}`}>
+                          <div className="flex items-center justify-between">
+                            <r.icon size={15}
+                              className={role === r.key && !locked ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
+                            {locked && <Lock size={11} className="text-[var(--color-text-faint)]" />}
+                          </div>
+                          <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
+                          <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">
+                            {locked ? "Needs read & write on the device" : r.desc}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
+                  {selectedReadOnly && (
+                    <p className="mt-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+                      “{selected.label}” was shared with read-only access on {selected.deviceName} —
+                      switch it to read &amp; write on the Devices page to grant Editor or Manager.
+                    </p>
+                  )}
                   {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
                   <div className="mt-4 flex justify-end gap-2">
                     <button className="btn btn-ghost" onClick={() => { setAddOpen(false); setError(null); }}>Cancel</button>

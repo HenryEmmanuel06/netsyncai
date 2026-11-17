@@ -14,7 +14,13 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
 from app.api.deps import current_auth, get_device_store
-from app.errors import http_403, http_404, http_422
+from app.errors import http_403, http_404, http_409, http_422
+from app.orchestration.dispatcher import (
+    CommandFailed,
+    CommandTimeout,
+    DeviceOffline,
+    dispatch,
+)
 from app.schemas.sharing import (
     GrantRequest,
     GrantResponse,
@@ -29,6 +35,7 @@ from app.services.device_registry import DeviceNotFound, DeviceStore, GrantError
 router = APIRouter(prefix="/sharing", tags=["sharing"])
 
 ROLE_BITS = {"viewer": 3, "editor": 255, "manager": 2047}
+VIEWER_BITS = 1 | 2  # browse + download — the only bits safe on read-only roots
 
 
 class AccessRequestBody(BaseModel):
@@ -43,6 +50,40 @@ def _map_store_errors(exc: Exception):
     if isinstance(exc, DeviceNotFound):
         return http_404("not found")
     return http_422(str(exc))
+
+
+def _norm_path(p: str) -> str:
+    return p.replace("/", "\\").rstrip("\\").lower()
+
+
+async def _root_access(device_id: str, root_path: str) -> str | None:
+    """Access level of the on-device shared root covering `root_path`.
+
+    Returns None when it can't be verified (agent offline or root not
+    registered) — the agent still enforces its own flags at op time, so
+    unverifiable never means unsafe."""
+    try:
+        result = await dispatch(device_id, "list_folders", {}, timeout=15)
+    except (DeviceOffline, CommandTimeout, CommandFailed):
+        return None
+    target = _norm_path(root_path)
+    best_len, access = -1, None
+    for f in result.get("folders") or []:
+        fp = _norm_path(str(f.get("path") or ""))
+        if fp and (target == fp or target.startswith(fp + "\\")) and len(fp) > best_len:
+            best_len, access = len(fp), f.get("access")
+    return access
+
+
+async def _enforce_root_access(share: dict, permissions: int) -> None:
+    """Roles beyond Viewer need the on-device root to allow writes."""
+    if not permissions & ~VIEWER_BITS:
+        return
+    if await _root_access(share["device_id"], share["root_path"]) == "read":
+        raise http_409(
+            "this folder was shared with read-only access — set it to "
+            "read & write on the device before granting Editor or Manager"
+        )
 
 
 @router.post("", response_model=SharedFolderResponse,
@@ -109,6 +150,7 @@ async def add_grant(
         raise http_422(f"cannot resolve user '{req.subject}'")
     if subject == auth.user_id:
         raise http_422("cannot grant access to yourself")
+    await _enforce_root_access(share, req.permissions)
     try:
         grant = await store.add_grant(
             folder_id, subject, req.permissions, auth.user_id
@@ -190,6 +232,12 @@ async def approve_request(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
+    incoming = await store.list_access_requests(auth.user_id, "incoming")
+    match = next((r for r in incoming if r["id"] == request_id), None)
+    if match:
+        share = await store.get_share(match["folder_id"])
+        if share:
+            await _enforce_root_access(share, ROLE_BITS[body.role])
     try:
         req = await store.resolve_access_request(
             auth.user_id, request_id, True, ROLE_BITS[body.role])

@@ -3,9 +3,9 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  ArrowLeft, Check, ChevronRight, CloudOff, Download, FileText, Folder,
-  FolderPlus, HardDrive, LayoutGrid, List, Monitor, Pencil, Plus,
-  RefreshCw, Search, Tag, Trash2, Upload, X,
+  ArrowLeft, Check, ChevronDown, ChevronRight, CloudOff, Download, Eye, FileText, Folder,
+  FolderPlus, FolderX, HardDrive, LayoutGrid, List, Monitor, Pencil, Plus,
+  Search, Tag, Trash2, Upload, X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -30,6 +30,14 @@ interface Picker {
 function filesFetch<T>(path: string, token: string, init?: RequestInit) {
   return apiFetch<T>(path, token, init);
 }
+
+const ACCESS_META: Record<string, { label: string; desc: string }> = {
+  read: { label: "View only", desc: "Colleagues can browse and download" },
+  readwrite: { label: "Full access", desc: "Colleagues can also add, rename and delete" },
+  granted: { label: "Shared with you", desc: "" },
+};
+
+const FILE_ROOT_RE = /\.[A-Za-z0-9]{1,8}$/;
 
 function FilesInner() {
   const params = useSearchParams();
@@ -59,6 +67,8 @@ function FilesInner() {
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [treeRoots, setTreeRoots] = useState<Record<string, Root[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [accessMenu, setAccessMenu] = useState<string | null>(null);
+  const [unshare, setUnshare] = useState<Root | null>(null);
 
   const picker = useMemo(
     () => pickers.find((p) => p.id === selected),
@@ -185,6 +195,45 @@ function FilesInner() {
     });
     setMkdirOpen(false); setMkdirName("");
     browse(picker.deviceId, path);
+  }
+
+  async function setAccess(r: Root, access: "read" | "readwrite") {
+    setAccessMenu(null);
+    if (!picker || access === r.access) return;
+    setError(null); setNotice(null);
+    try {
+      await filesFetch(`/api/v1/devices/${picker.deviceId}/folders`, token!, {
+        method: "PATCH", body: JSON.stringify({ path: r.path, access }),
+      });
+      const upd = (rs: Root[]) => rs.map((x) => (x.path === r.path ? { ...x, access } : x));
+      setRoots(upd);
+      setTreeRoots((t) => ({ ...t, [picker.deviceId]: upd(t[picker.deviceId] ?? []) }));
+      setNotice(`${r.label} is now ${ACCESS_META[access].label.toLowerCase()} for colleagues.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "could not change access");
+    }
+  }
+
+  async function doUnshare() {
+    if (!picker || !unshare) return;
+    const r = unshare;
+    setUnshare(null); setError(null);
+    try {
+      await filesFetch(`/api/v1/devices/${picker.deviceId}/folders/remove`, token!, {
+        method: "POST", body: JSON.stringify({ path: r.path }),
+      });
+      setRoots((rs) => rs.filter((x) => x.path !== r.path));
+      setTreeRoots((t) => ({
+        ...t,
+        [picker.deviceId]: (t[picker.deviceId] ?? []).filter((x) => x.path !== r.path),
+      }));
+      if (path.toLowerCase().startsWith(r.path.toLowerCase())) {
+        setPath("");
+        browse(picker.deviceId, "");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "could not stop sharing");
+    }
   }
 
   async function doUpload(fileList: FileList | null) {
@@ -639,20 +688,99 @@ function FilesInner() {
         )}
         </div>
       </div>
-      {!path && !searchMode && roots.length > 0 && (
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          {roots.map((r) => (
-            <button key={r.path} className="card card-hover flex items-center gap-3 p-3 text-left"
-              onClick={() => picker && browse(picker.deviceId, r.path)}>
-              <HardDrive size={16} className="text-[var(--color-accent)]" />
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">{r.label}</div>
-                <div className="truncate text-xs text-[var(--color-text-dim)]">
-                  {r.path} · {(r.access === "granted" ? "shared" : r.access) ?? ""}
+      {roots.length > 0 && (
+        <div className="mt-5">
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-sm font-semibold">{picker?.shared ? "Shared with you" : "Shared folders"}</h2>
+            <span className="pill">{roots.length}</span>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {roots.map((r) => {
+              const own = !picker?.shared && r.access !== "granted";
+              const meta = ACCESS_META[r.access];
+              return (
+                <div key={r.path}
+                  className="card group relative flex flex-col items-center px-4 pb-0 pt-6 text-center">
+                  {own && (
+                    <button
+                      className="icon-btn absolute right-2.5 top-2.5 !h-7 !w-7 text-[var(--color-text-faint)] opacity-0 transition-opacity hover:!text-[var(--color-danger)] group-hover:opacity-100"
+                      title="Stop sharing this folder"
+                      onClick={() => setUnshare(r)}>
+                      <FolderX size={14} />
+                    </button>
+                  )}
+                  <button className="flex w-full min-w-0 flex-col items-center"
+                    onClick={() => picker && browse(picker.deviceId, r.path)}>
+                    <div className="flex h-[72px] items-center transition-transform duration-200 group-hover:-translate-y-0.5 group-hover:scale-[1.04]">
+                      {FILE_ROOT_RE.test(r.label)
+                        ? <FileIcon name={r.label} size={56} />
+                        : <FolderArt size={76} />}
+                    </div>
+                    <span className="mt-3 max-w-full truncate text-[15px] font-semibold">{r.label}</span>
+                    <span className="pill mt-2">
+                      {picker?.shared ? picker.shared.device_name : picker?.label}
+                    </span>
+                    <span className="mt-1.5 max-w-full truncate text-[11px] text-[var(--color-text-faint)]"
+                      title={r.path}>
+                      {r.path}
+                    </span>
+                  </button>
+                  <div className="mt-4 w-full space-y-2 border-t border-[var(--color-border)] py-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[var(--color-text-dim)]">Owner</span>
+                      <span className="font-medium">
+                        {own ? "You" : picker?.shared?.owner_email ?? picker?.shared?.device_name ?? "Colleague"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[var(--color-text-dim)]">Access</span>
+                      {own ? (
+                        <div className="relative">
+                          <button
+                            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                              r.access === "readwrite"
+                                ? "border-[rgba(139,92,246,0.45)] bg-[rgba(139,92,246,0.12)] text-[var(--color-accent)]"
+                                : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+                            }`}
+                            onClick={() => setAccessMenu(accessMenu === r.path ? null : r.path)}>
+                            {r.access === "readwrite" ? <Pencil size={10} /> : <Eye size={10} />}
+                            {meta?.label ?? r.access}
+                            <ChevronDown size={11} />
+                          </button>
+                          {accessMenu === r.path && (
+                            <>
+                              <div className="fixed inset-0 z-20" onClick={() => setAccessMenu(null)} />
+                              <div className="card pop-in absolute right-0 top-full z-30 mt-1.5 w-60 p-1.5 text-left">
+                                {(["read", "readwrite"] as const).map((a) => (
+                                  <button key={a} className="menu-item" onClick={() => setAccess(r, a)}>
+                                    {a === "read"
+                                      ? <Eye size={13} className="shrink-0 text-[var(--color-text-dim)]" />
+                                      : <Pencil size={13} className="shrink-0 text-[var(--color-accent)]" />}
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block">{ACCESS_META[a].label}</span>
+                                      <span className="block text-[10px] text-[var(--color-text-faint)]">
+                                        {ACCESS_META[a].desc}
+                                      </span>
+                                    </span>
+                                    <Check size={13}
+                                      className={`shrink-0 text-[var(--color-accent)] ${r.access === a ? "" : "invisible"}`} />
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-text-dim)]">
+                          {meta?.label ?? r.access}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </button>
-          ))}
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -695,6 +823,14 @@ function FilesInner() {
           body="This permanently deletes the file on that computer — it is not moved to the recycle bin."
           confirmLabel="Delete" danger
           onConfirm={doDelete} onCancel={() => setDeleting(null)}
+        />
+      )}
+      {unshare && (
+        <ConfirmDialog
+          title={`Stop sharing ${unshare.label}?`}
+          body="The folder stays on this computer, but colleagues immediately lose access to it."
+          confirmLabel="Stop sharing" danger
+          onConfirm={doUnshare} onCancel={() => setUnshare(null)}
         />
       )}
       <style jsx global>{`

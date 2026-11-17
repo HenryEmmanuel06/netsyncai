@@ -141,11 +141,13 @@ async def test_two_agent_bidirectional_sync(backend, tmp_path):
                 and (root_b / "seed.txt").read_text() == "edited on A"
             ), "modify did not propagate"
 
-            # delete propagates (file is sync-tracked)
+            # deletes do NOT propagate: B removing its copy must not delete
+            # A's original — the file simply falls out of sync tracking.
             (root_b / "newfile.md").unlink()
-            assert await _wait_for(
-                lambda: not (root_a / "newfile.md").exists()
-            ), "delete did not propagate"
+            await asyncio.sleep(2)  # any (bad) propagation would have fired
+            assert (root_a / "newfile.md").exists(), \
+                "peer delete removed the original file"
+            assert not (root_b / "newfile.md").exists()
 
             # pause stops propagation
             r = await http.post(f"/api/v1/sync/{session_id}/pause",

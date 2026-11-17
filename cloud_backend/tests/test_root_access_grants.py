@@ -1,0 +1,85 @@
+"""Editor/Manager grants are rejected while the on-device root is read-only."""
+
+import pytest
+
+from app.orchestration.dispatcher import DeviceOffline
+from tests.conftest import OTHER_USER
+
+pytestmark = pytest.mark.asyncio
+
+ROOT = r"C:\shared\docs"
+
+
+async def _setup_share(client, auth_headers):
+    r = await client.post("/api/v1/devices", json={"name": "PC"},
+                          headers=auth_headers)
+    dev = r.json()
+    r = await client.post("/api/v1/sharing", headers=auth_headers, json={
+        "device_id": dev["id"], "root_path": ROOT, "label": "Docs",
+    })
+    return dev["id"], r.json()["id"]
+
+
+def _agent_folders(access: str):
+    async def fake_dispatch(device_id, tool, args, timeout=None):
+        assert tool == "list_folders"
+        return {"folders": [{"path": ROOT, "label": "Docs", "access": access}]}
+    return fake_dispatch
+
+
+async def test_editor_rejected_on_read_only_root(client, auth_headers, monkeypatch):
+    _, folder_id = await _setup_share(client, auth_headers)
+    monkeypatch.setattr("app.api.sharing.dispatch", _agent_folders("read"))
+
+    r = await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                          headers=auth_headers,
+                          json={"subject": OTHER_USER, "permissions": 255})
+    assert r.status_code == 409
+    assert "read-only" in r.json()["detail"]["error"].lower()
+
+    # viewer is still fine on a read-only root
+    r = await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                          headers=auth_headers,
+                          json={"subject": OTHER_USER, "permissions": 3})
+    assert r.status_code == 201
+
+
+async def test_editor_allowed_on_readwrite_root(client, auth_headers, monkeypatch):
+    _, folder_id = await _setup_share(client, auth_headers)
+    monkeypatch.setattr("app.api.sharing.dispatch", _agent_folders("readwrite"))
+
+    r = await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                          headers=auth_headers,
+                          json={"subject": OTHER_USER, "permissions": 255})
+    assert r.status_code == 201
+
+
+async def test_unverifiable_root_does_not_block(client, auth_headers, monkeypatch):
+    """Agent offline → grant proceeds; the agent enforces its flags at op time."""
+    _, folder_id = await _setup_share(client, auth_headers)
+
+    async def offline(device_id, tool, args, timeout=None):
+        raise DeviceOffline(device_id)
+
+    monkeypatch.setattr("app.api.sharing.dispatch", offline)
+    r = await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                          headers=auth_headers,
+                          json={"subject": OTHER_USER, "permissions": 2047})
+    assert r.status_code == 201
+
+
+async def test_approve_request_enforced(client, auth_headers,
+                                        other_auth_headers, monkeypatch):
+    _, folder_id = await _setup_share(client, auth_headers)
+    await client.post(f"/api/v1/sharing/{folder_id}/request",
+                      headers=other_auth_headers, json={"role": "editor"})
+    reqs = await client.get("/api/v1/sharing/requests", headers=auth_headers)
+    req_id = reqs.json()["incoming"][0]["id"]
+
+    monkeypatch.setattr("app.api.sharing.dispatch", _agent_folders("read"))
+    r = await client.post(f"/api/v1/sharing/requests/{req_id}/approve",
+                          headers=auth_headers, json={"role": "editor"})
+    assert r.status_code == 409
+    r = await client.post(f"/api/v1/sharing/requests/{req_id}/approve",
+                          headers=auth_headers, json={"role": "viewer"})
+    assert r.status_code == 200
