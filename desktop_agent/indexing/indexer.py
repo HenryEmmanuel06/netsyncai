@@ -75,6 +75,7 @@ def index_folder(
     root = Path(row["path"])
     stats = IndexStats()
     seen: set[str] = set()
+    pending = 0  # writes since last commit — batch so other ops aren't starved
 
     if root.is_file():
         # a registered "folder" may be a single shared file — index just it
@@ -147,6 +148,11 @@ def index_folder(
                 new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 _record_revision(conn, new_id, digest, st.st_size, st.st_mtime)
                 stats.added += 1
+
+            pending += 1
+            if pending >= 200:
+                conn.commit()
+                pending = 0
 
     # anything indexed but not seen on disk is gone
     stale = conn.execute(

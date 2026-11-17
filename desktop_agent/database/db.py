@@ -24,10 +24,16 @@ def db_path(data_dir: Path) -> Path:
 
 
 def connect(data_dir: Path) -> sqlite3.Connection:
-    """Open (creating if needed) the agent database and apply the schema."""
+    """Open (creating if needed) the agent database and apply the schema.
+
+    WAL + a generous busy timeout: the indexer runs on its own connection
+    in a thread, so concurrent list/add/remove ops must not hit
+    "database is locked" while a scan is in flight."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path(data_dir), detect_types=0)
+    conn = sqlite3.connect(db_path(data_dir), timeout=30, detect_types=0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
     _apply_schema(conn)
     _migrate(conn)
