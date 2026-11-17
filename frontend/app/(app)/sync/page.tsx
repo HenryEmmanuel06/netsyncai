@@ -170,11 +170,13 @@ type SyncRequest = SyncSession & {
 function RequestCard({ r, devices, token, onRespond }: {
   r: SyncRequest; devices: Device[]; token: string;
   onRespond: (id: string, accept: boolean,
-              dest?: { device_id: string; root_path: string }) => void;
+              dest?: { device_id: string; root_path?: string;
+                       to_downloads?: boolean }) => void;
 }) {
   const [dev, setDev] = useState("");
   const [folders, setFolders] = useState<SharedFolderInfo[] | null>(null);
   const [root, setRoot] = useState("");
+  const [destKind, setDestKind] = useState<"downloads" | "pick">("downloads");
 
   useEffect(() => {
     if (!dev || !token) { setFolders(null); return; }
@@ -201,7 +203,7 @@ function RequestCard({ r, devices, token, onRespond }: {
               {r.needs_folder ? (
                 <>
                   A colleague wants to sync <span className="font-medium text-[var(--color-text)]">{src}</span> with you.
-                  Pick a folder on your PC to receive it, then accept — their content downloads there and stays in sync.
+                  Accepting downloads it to your PC and keeps both sides in sync.
                 </>
               ) : (
                 <>
@@ -215,25 +217,50 @@ function RequestCard({ r, devices, token, onRespond }: {
           <div className="flex gap-2">
             <button className="btn btn-ghost" onClick={() => onRespond(r.id, false)}>Decline</button>
             <button className="btn btn-primary"
-              disabled={!!r.needs_folder && !root}
+              disabled={!!r.needs_folder && (!dev || (destKind === "pick" && !root))}
               onClick={() => onRespond(r.id, true,
-                r.needs_folder && root ? { device_id: dev, root_path: root } : undefined)}>
+                r.needs_folder
+                  ? destKind === "downloads"
+                    ? { device_id: dev, to_downloads: true }
+                    : { device_id: dev, root_path: root }
+                  : undefined)}>
               <Check size={14} /> Accept & sync
             </button>
           </div>
         </div>
 
         {r.needs_folder && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-3">
-            <Monitor size={13} className="text-[var(--color-text-faint)]" />
-            <select className="input !w-auto !py-1.5 text-xs" value={dev}
-              onChange={(e) => { setDev(e.target.value); setRoot(""); }}>
-              <option value="">Your computer…</option>
-              {devices.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}{d.status !== "online" ? " (offline)" : ""}</option>
-              ))}
-            </select>
-            {dev && (
+          <div className="mt-3 space-y-2 border-t border-[var(--color-border)] pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Monitor size={13} className="text-[var(--color-text-faint)]" />
+              <select className="input !w-auto !py-1.5 text-xs" value={dev}
+                onChange={(e) => { setDev(e.target.value); setRoot(""); }}>
+                <option value="">Your computer…</option>
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}{d.status !== "online" ? " (offline)" : ""}</option>
+                ))}
+              </select>
+              {dev && (
+                <div className="flex overflow-hidden rounded-lg border border-[var(--color-border)] text-xs">
+                  <button
+                    className={`px-3 py-1.5 transition ${destKind === "downloads" ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-surface-2)] text-[var(--color-text-dim)]"}`}
+                    onClick={() => setDestKind("downloads")}>
+                    New folder in Downloads
+                  </button>
+                  <button
+                    className={`px-3 py-1.5 transition ${destKind === "pick" ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-surface-2)] text-[var(--color-text-dim)]"}`}
+                    onClick={() => setDestKind("pick")}>
+                    Existing folder
+                  </button>
+                </div>
+              )}
+            </div>
+            {dev && destKind === "downloads" && (
+              <p className="text-[11px] text-[var(--color-text-faint)]">
+                A new folder <span className="font-medium text-[var(--color-text)]">Downloads\{src}</span> will be created on that PC and kept in sync.
+              </p>
+            )}
+            {dev && destKind === "pick" && (
               folders === null ? <Spinner size={14} /> : (
                 <select className="input !w-auto min-w-56 !py-1.5 text-xs" value={root}
                   onChange={(e) => setRoot(e.target.value)}>
@@ -353,7 +380,8 @@ export default function SyncPage() {
   }
 
   async function respondToRequest(
-    id: string, accept: boolean, dest?: { device_id: string; root_path: string },
+    id: string, accept: boolean,
+    dest?: { device_id: string; root_path?: string; to_downloads?: boolean },
   ) {
     try {
       await apiFetch(`/api/v1/sync/${id}/${accept ? "accept" : "decline"}`,

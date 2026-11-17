@@ -24,7 +24,10 @@ class SyncAcceptRequest(BaseModel):
     """The accepting user's side of a pending sync request."""
 
     device_id: str
-    root_path: str = Field(min_length=1)
+    root_path: str | None = None
+    # single-folder sync: drop the shared folder into Downloads\<name>
+    # on this device — the agent creates and registers it as readwrite.
+    to_downloads: bool = False
 
 
 class SyncParticipant(BaseModel):

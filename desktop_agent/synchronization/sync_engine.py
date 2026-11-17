@@ -109,6 +109,15 @@ class SyncEngine:
         rt.observer.start()
         rt.drain_task = asyncio.create_task(self._drain(rt))
 
+        # sweep temp dirs older versions littered mid-sync
+        if not rt.file_root and root.is_dir():
+            for dirpath, _, _ in os.walk(root, topdown=False):
+                if os.path.basename(dirpath) == PARTIAL_DIR:
+                    try:
+                        os.rmdir(dirpath)  # only succeeds when empty
+                    except OSError:
+                        pass
+
         await self._send_snapshot(rt)
         log.info("sync %s started on %s (peer %s)", session_id, root, peer)
         return {"session_id": session_id, "root": str(root), "state": "active"}
@@ -179,9 +188,9 @@ class SyncEngine:
                 old_rel = self._rel(rt, Path(src))
                 if old_rel and not self._ignored(old_rel):
                     seen[old_rel] = ("delete", Path(src), None)
-                seen[rel] = ("modify", p, None)
+                seen[rel] = ("dir" if p.is_dir() else "modify", p, None)
             elif p.is_dir():
-                continue  # dirs are implicit
+                seen[rel] = ("dir", p, None)
             elif ev_type == "deleted":
                 seen[rel] = ("delete", p, None)
             else:
@@ -201,6 +210,10 @@ class SyncEngine:
             return SyncEvent(session_id=rt.session_id, op_id=op_id,
                              op=SyncOpType.DELETE, rel_path=rel,
                              from_device=self.device_id)
+        if op == "dir":
+            return SyncEvent(session_id=rt.session_id, op_id=op_id,
+                             op=SyncOpType.DIR, rel_path=rel,
+                             from_device=self.device_id)
         try:
             st = path.stat()
         except OSError:
@@ -214,6 +227,7 @@ class SyncEngine:
 
     async def _send_snapshot(self, rt: SyncRuntime) -> None:
         entries = []
+        dirs: list[str] = []
         if rt.file_root and rt.root.is_file():
             st = rt.root.stat()
             entries.append({"rel_path": rt.root.name, "sha256": sha256_file(rt.root),
@@ -222,6 +236,10 @@ class SyncEngine:
             if rt.file_root:
                 break
             dirnames[:] = [d for d in dirnames if d not in DEFAULT_IGNORES]
+            for d in dirnames:
+                rel = self._rel(rt, Path(dirpath) / d)
+                if rel is not None:
+                    dirs.append(rel)
             for fname in filenames:
                 if fname in DEFAULT_IGNORES:
                     continue
@@ -239,7 +257,7 @@ class SyncEngine:
                     break
         ev = SyncEvent(session_id=rt.session_id, op_id=str(uuid.uuid4()),
                        op=SyncOpType.SNAPSHOT, rel_path="", entries=entries,
-                       from_device=self.device_id)
+                       dirs=dirs, from_device=self.device_id)
         await self._send_event(rt, ev)
 
     async def _send_event(self, rt: SyncRuntime, ev: SyncEvent) -> None:
@@ -252,7 +270,11 @@ class SyncEngine:
     # ── inbound (peer changes) ───────────────────────────────────────────
 
     async def on_sync_event(self, env: Envelope) -> None:
-        ev = SyncEvent.model_validate(env.payload)
+        try:
+            ev = SyncEvent.model_validate(env.payload)
+        except Exception:
+            log.warning("unreadable sync event dropped")
+            return
         rt = self.sessions.get(ev.session_id)
         if rt is None:
             return
@@ -268,6 +290,8 @@ class SyncEngine:
                 rt.snapshot_replies = 1
                 await self._send_snapshot(rt)
             await self._apply_snapshot(rt, ev)
+        elif ev.op is SyncOpType.DIR:
+            await self._apply_dir(rt, ev)
         elif ev.op is SyncOpType.DELETE:
             await self._apply_delete(rt, ev)
         elif ev.op is SyncOpType.RENAME:
@@ -317,8 +341,31 @@ class SyncEngine:
             payload=TransferEnd(transfer_id=transfer_id, seq=seq, sha256=digest).model_dump(),
         ).model_dump_json())
 
+    async def _apply_dir(self, rt: SyncRuntime, ev: SyncEvent) -> None:
+        """Peer created a folder — make it here (empty folders sync too)."""
+        rel = ev.rel_path
+        if self._ignored(rel):
+            return
+        target = (rt.root / rel).resolve()
+        try:
+            target.relative_to(rt.root.resolve())
+        except ValueError:
+            return
+        self._mark_suppressed(rt, rel)
+        target.mkdir(parents=True, exist_ok=True)
+
     async def _apply_snapshot(self, rt: SyncRuntime, ev: SyncEvent) -> None:
         """Request whatever we're missing or differ on."""
+        for rel in ev.dirs:
+            if self._ignored(rel):
+                continue
+            target = (rt.root / rel).resolve()
+            try:
+                target.relative_to(rt.root.resolve())
+            except ValueError:
+                continue
+            self._mark_suppressed(rt, rel)
+            target.mkdir(parents=True, exist_ok=True)
         for entry in ev.entries:
             rel = entry["rel_path"]
             local = rt.root / rel
@@ -378,6 +425,10 @@ class SyncEngine:
         tmp.parent.mkdir(exist_ok=True)
         tmp.write_bytes(content)
         os.replace(tmp, dest)
+        try:
+            tmp.parent.rmdir()  # temp dir served its turn — don't litter
+        except OSError:
+            pass
         if not conflict:
             self._record_state(rt, rel, ev.sha256 or "", ev.mtime)
 

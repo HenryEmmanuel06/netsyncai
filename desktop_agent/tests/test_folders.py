@@ -121,6 +121,18 @@ async def test_add_rejects_missing_dir(ctx, tmp_path):
         await FOLDER_HANDLERS["add_folder"](ctx, {"path": str(tmp_path / "nope")})
 
 
+async def test_add_folder_create_flag_makes_dir(ctx, tmp_path, allow_tmp):
+    """create=true makes a brand-new folder (sync-into-Downloads accept)."""
+    target = tmp_path / "NetSync - Photos"
+    r = await FOLDER_HANDLERS["add_folder"](ctx, {
+        "path": str(target), "access": "readwrite", "create": True,
+    })
+    assert target.is_dir()
+    assert r["access"] == "readwrite"
+    listed = (await FOLDER_HANDLERS["list_folders"](ctx, {}))["folders"]
+    assert [f["path"] for f in listed] == [r["path"]]
+
+
 async def test_add_file_share(ctx, sample_tree, allow_tmp):
     """A single file can be shared — it's registered and indexed as itself."""
     f = sample_tree / "README.md"

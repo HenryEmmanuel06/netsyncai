@@ -6,6 +6,8 @@ Events then flow agent → coordinator → peer agent.
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import current_auth, get_device_store
@@ -111,6 +113,37 @@ async def _start_agents(
             break
 
 
+def _safe_folder_name(raw: str) -> str:
+    name = re.sub(r'[<>:"/\\|?*]', "", raw).strip(" .")
+    return name or "NetSync Folder"
+
+
+async def _downloads_root(session: dict, device_id: str) -> str:
+    """`Downloads\\<source folder name>` on the accepter's PC — the agent
+    creates and registers it readwrite so start_sync can write there."""
+    try:
+        dirs = await dispatch(device_id, "list_local_dirs", {}, timeout=15)
+    except (DeviceOffline, CommandFailed) as exc:
+        raise http_409(str(getattr(exc, "error", exc)))
+    dl = next((e["path"] for e in dirs.get("entries", [])
+               if e.get("name") == "Downloads"), None)
+    if not dl:
+        raise http_409("couldn't locate a Downloads folder — pick one instead")
+    src = ""
+    if session["participants"]:
+        src = (session["participants"][0]["root"].rstrip("\\/")
+               .replace("/", "\\").split("\\")[-1])
+    name = _safe_folder_name(src or session["name"])
+    target = dl.rstrip("\\") + "\\" + name
+    try:
+        res = await dispatch(device_id, "add_folder",
+                             {"path": target, "access": "readwrite",
+                              "label": name, "create": True}, timeout=15)
+    except (DeviceOffline, CommandFailed) as exc:
+        raise http_409(str(getattr(exc, "error", exc)))
+    return res.get("path", target)
+
+
 @router.get("/requests")
 async def sync_requests(
     auth: AuthContext = Depends(current_auth),
@@ -156,8 +189,14 @@ async def accept_sync(
             await store.get_device(auth.user_id, body.device_id)
         except DeviceNotFound:
             raise http_404("device not found")
+        if body.to_downloads:
+            root_path = await _downloads_root(session, body.device_id)
+        elif body.root_path:
+            root_path = body.root_path
+        else:
+            raise http_422("choose a folder on your computer to sync into")
         session = await store.add_sync_participant(
-            session_id, body.device_id, body.root_path)
+            session_id, body.device_id, root_path)
     try:
         session = await store.set_sync_state(auth.user_id, session_id, "active")
     except DeviceNotFound:

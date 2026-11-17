@@ -184,11 +184,19 @@ async def op_add_folder(ctx: AgentContext, args: dict) -> dict:
     if access not in ACCESS_LEVELS:
         raise OpDenied("access must be 'read' or 'readwrite'")
     target = Path(raw)
-    if not raw or not target.is_absolute() or not (target.is_dir() or target.is_file()):
+    if not raw or not target.is_absolute():
         raise OpDenied("not a file or folder on this computer")
     target = target.resolve()
+    exists = target.is_dir() or target.is_file()
+    if not exists and not args.get("create"):
+        raise OpDenied("not a file or folder on this computer")
     if reason := is_blocked(target, ctx.data_dir):
         raise OpDenied(reason)
+    if not exists:
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise OpDenied(f"couldn't create folder: {exc.strerror or exc}")
     label = (args.get("label") or target.name or str(target))[:120]
     folder_id = register_folder(ctx.conn, target, label=label, access=access)
     ctx.indexing.add(folder_id)  # visible as "indexing" immediately

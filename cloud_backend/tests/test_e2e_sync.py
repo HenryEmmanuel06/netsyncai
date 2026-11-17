@@ -141,6 +141,21 @@ async def test_two_agent_bidirectional_sync(backend, tmp_path):
                 and (root_b / "seed.txt").read_text() == "edited on A"
             ), "modify did not propagate"
 
+            # folders themselves propagate, in both directions
+            (root_b / "made-on-B").mkdir()
+            assert await _wait_for(
+                lambda: (root_a / "made-on-B").is_dir()
+            ), "B->A folder did not propagate"
+            (root_a / "made-on-A" / "nested").mkdir(parents=True)
+            assert await _wait_for(
+                lambda: (root_b / "made-on-A" / "nested").is_dir()
+            ), "A->B folder did not propagate"
+            # and files inside synced folders arrive under the real name
+            (root_b / "made-on-B" / "inner.txt").write_text("inside")
+            assert await _wait_for(
+                lambda: (root_a / "made-on-B" / "inner.txt").is_file()
+            ), "file inside synced folder did not arrive"
+
             # deletes do NOT propagate: B removing its copy must not delete
             # A's original — the file simply falls out of sync tracking.
             (root_b / "newfile.md").unlink()
@@ -162,6 +177,12 @@ async def test_two_agent_bidirectional_sync(backend, tmp_path):
             assert await _wait_for(
                 lambda: (root_b / "paused.txt").exists()
             ), "resume did not converge"
+
+            # transfer temp dirs must not linger on either side
+            assert not list(root_a.rglob(".netsync-partial")), \
+                "leftover .netsync-partial on A"
+            assert not list(root_b.rglob(".netsync-partial")), \
+                "leftover .netsync-partial on B"
         finally:
             for s in sessions:
                 s.cancel()

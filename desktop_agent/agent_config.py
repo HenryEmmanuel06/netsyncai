@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-AGENT_VERSION = "0.4.1"
+AGENT_VERSION = "0.4.2"
 
 
 def _config_path() -> Path | None:

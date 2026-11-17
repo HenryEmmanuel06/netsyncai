@@ -133,6 +133,7 @@ class SyncOpType(str, Enum):
     MODIFY = "modify"
     DELETE = "delete"
     RENAME = "rename"
+    DIR = "dir"             # ensure a directory exists on the peer
 
 
 class SyncEvent(BaseModel):
@@ -147,6 +148,7 @@ class SyncEvent(BaseModel):
     from_device: str
     # op-specific extras
     entries: list[dict[str, Any]] = Field(default_factory=list)  # SNAPSHOT
+    dirs: list[str] = Field(default_factory=list)                # SNAPSHOT folders
     old_rel_path: str | None = None                              # RENAME
 
 

@@ -169,6 +169,45 @@ async def test_sync_request_unknown_user(client, auth_headers):
     assert r.status_code == 422
 
 
+async def test_sync_accept_to_downloads_creates_root(
+    client, auth_headers, other_auth_headers, monkeypatch
+):
+    """Single-folder sync: the accepter sends no path — the backend asks the
+    agent for its Downloads dir, creates Downloads\\<src name> there and
+    registers it so start_sync may write into it."""
+    mine = (await client.post("/api/v1/devices", json={"name": "Mine"},
+                              headers=auth_headers)).json()["id"]
+    theirs = (await client.post("/api/v1/devices", json={"name": "Colleague-PC"},
+                                headers=other_auth_headers)).json()["id"]
+    sid = (await client.post("/api/v1/sync", headers=auth_headers, json={
+        "a_device_id": mine, "a_path": r"C:\shared\Photos",
+        "b_user": OTHER_USER, "mode": "live",
+    })).json()["id"]
+
+    calls: list[str] = []
+
+    async def fake_dispatch(device_id, tool, args, timeout=None):
+        calls.append(tool)
+        if tool == "list_local_dirs":
+            return {"entries": [{"name": "Downloads",
+                                 "path": r"C:\Users\Me\Downloads"}]}
+        if tool == "add_folder":
+            assert args["create"] is True and args["access"] == "readwrite"
+            return {"id": 7, "path": args["path"], "access": args["access"]}
+        return {}
+
+    monkeypatch.setattr("app.api.sync.dispatch", fake_dispatch)
+
+    r = await client.post(f"/api/v1/sync/{sid}/accept",
+                          headers=other_auth_headers,
+                          json={"device_id": theirs, "to_downloads": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] in ("active", "error")
+    assert "list_local_dirs" in calls and "add_folder" in calls
+    dest = next(p for p in r.json()["participants"] if p["device_id"] == theirs)
+    assert dest["root"] == r"C:\Users\Me\Downloads\Photos"
+
+
 async def test_cross_account_sync_hidden_from_strangers(
     client, auth_headers, other_auth_headers
 ):
