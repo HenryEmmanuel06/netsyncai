@@ -134,6 +134,7 @@ function FolderManager({ device, token, onClose }: {
   const [dirPath, setDirPath] = useState("");
   const [dirs, setDirs] = useState<LocalDirEntry[]>([]);
   const [parent, setParent] = useState<string | null>(null);
+  const [curBlocked, setCurBlocked] = useState<string | null>(null);
   const [access, setAccess] = useState<"read" | "readwrite">("read");
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<SharedFolderInfo | null>(null);
@@ -152,9 +153,10 @@ function FolderManager({ device, token, onClose }: {
 
   const loadDir = useCallback(async (path: string) => {
     try {
-      const r = await apiFetch<{ path: string; parent: string | null; entries: LocalDirEntry[] }>(
-        `/api/v1/devices/${device.id}/local-dirs?path=${encodeURIComponent(path)}`, token);
+      const r = await apiFetch<{ path: string; parent: string | null; entries: LocalDirEntry[]; blocked?: string | null }>(
+        `/api/v1/devices/${device.id}/local-dirs?path=${encodeURIComponent(path)}&files=1`, token);
       setDirPath(r.path); setParent(r.parent); setDirs(r.entries);
+      setCurBlocked(r.blocked ?? null);
       setError(null);
     } catch (e) { setError(e instanceof Error ? e.message : "failed"); }
   }, [device.id, token]);
@@ -260,6 +262,14 @@ function FolderManager({ device, token, onClose }: {
               <code className="flex-1 truncate text-xs text-[var(--color-text-dim)]">
                 {dirPath || "Quick locations & drives"}
               </code>
+              {dirPath && (
+                <button className="btn btn-primary !px-3 !py-1 text-xs"
+                  disabled={!!curBlocked || busyPath === dirPath}
+                  title={curBlocked ?? "Share the folder you're inside"}
+                  onClick={() => add(dirPath)}>
+                  {busyPath === dirPath ? <Spinner size={12} /> : "Share this folder"}
+                </button>
+              )}
               <select className="input !py-1 text-xs" value={access}
                 onChange={(e) => setAccess(e.target.value as typeof access)}>
                 <option value="read">Read only</option>
@@ -271,15 +281,17 @@ function FolderManager({ device, token, onClose }: {
                 <div key={d.path}
                   className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-sm last:border-0">
                   <button className="flex flex-1 items-center gap-2 text-left hover:text-[var(--color-accent)]"
-                    onClick={() => loadDir(d.path)} disabled={!!d.blocked}>
-                    <HardDrive size={14} className="text-[var(--color-warn)]" />
+                    onClick={() => d.kind === "file" ? add(d.path) : loadDir(d.path)}
+                    disabled={!!d.blocked}>
+                    <HardDrive size={14} className={d.kind === "file" ? "text-[var(--color-text-dim)]" : "text-[var(--color-warn)]"} />
                     <span className="truncate">{d.name}</span>
-                    <ChevronRight size={14} className="ml-auto text-[var(--color-text-dim)]" />
+                    {d.kind !== "file" &&
+                      <ChevronRight size={14} className="ml-auto text-[var(--color-text-dim)]" />}
                   </button>
-                  {d.kind === "dir" && (
+                  {d.kind !== "drive" && (
                     <button className="btn btn-ghost !px-2 !py-1 text-xs"
                       disabled={!!d.blocked || busyPath === d.path}
-                      title={d.blocked ?? "Share this folder"}
+                      title={d.blocked ?? (d.kind === "file" ? "Share this file" : "Share this folder")}
                       onClick={() => add(d.path)}>
                       {busyPath === d.path ? <Spinner size={12} /> : "Share"}
                     </button>
