@@ -300,7 +300,9 @@ function FilesInner() {
       }
       const url = URL.createObjectURL(new Blob(chunks as BlobPart[]));
       const a = document.createElement("a");
-      a.href = url; a.download = e.name; a.click();
+      a.href = url;
+      a.download = e.is_dir ? `${e.name}.zip` : e.name;
+      a.click();
       URL.revokeObjectURL(url);
       transfers.finish(t.id);
     } catch (err) {
@@ -330,11 +332,9 @@ function FilesInner() {
     return (
       <div className={`card absolute right-0 z-20 w-40 p-1.5 !bg-[var(--color-surface-3)] !shadow-[0_16px_40px_-8px_rgba(0,0,0,0.75)] ${
         up ? "bottom-full mb-1" : "top-full mt-1"}`}>
-        {!dir && (
-          <button className="menu-item" onClick={() => { download(e); setMenu(null); }}>
-            <Download size={13} /> Download
-          </button>
-        )}
+        <button className="menu-item" onClick={() => { download(e); setMenu(null); }}>
+          <Download size={13} /> {dir ? "Download ZIP" : "Download"}
+        </button>
         {!dir && /\.(docx?|odt|pptx?|xlsx?|txt|rtf)$/i.test(e.name) && (
           <button className="menu-item" onClick={() => { convert(e); setMenu(null); }}>
             <FileText size={13} /> Convert to PDF
@@ -608,7 +608,7 @@ function FilesInner() {
                   <div className="absolute right-1.5 top-1.5 z-10">
                     <button className="icon-btn !h-7 !w-7 opacity-0 transition-opacity group-hover:opacity-100"
                       onClick={() => setMenu(menu === p ? null : p)}>···</button>
-                    {menu === p && entryMenu(e, p, dir, i >= entries.length - 4)}
+                    {menu === p && entryMenu(e, p, dir, i >= 4 && i >= entries.length - 4)}
                   </div>
                   <button className="flex w-full flex-col items-center px-3 pb-3.5 pt-5"
                     onClick={() => dir ? open(e) : download(e)}>
@@ -678,7 +678,7 @@ function FilesInner() {
                       <div className="relative flex justify-end">
                         <button className="btn btn-ghost !p-1.5 opacity-0 transition-opacity group-hover:opacity-100"
                           onClick={() => setMenu(menu === p ? null : p)}>···</button>
-                        {menu === p && entryMenu(e, p, dir, i >= entries.length - 3)}
+                        {menu === p && entryMenu(e, p, dir, i >= 3 && i >= entries.length - 3)}
                       </div>
                     </td>
                   </tr>
@@ -751,7 +751,7 @@ function FilesInner() {
                           {accessMenu === r.path && (
                             <>
                               <div className="fixed inset-0 z-20" onClick={() => setAccessMenu(null)} />
-                              <div className="card pop-in absolute right-0 top-full z-30 mt-1.5 w-60 p-1.5 text-left">
+                              <div className="card pop-in absolute right-0 bottom-full z-30 mb-1.5 w-60 p-1.5 text-left">
                                 {(["read", "readwrite"] as const).map((a) => (
                                   <button key={a} className="menu-item" onClick={() => setAccess(r, a)}>
                                     {a === "read"

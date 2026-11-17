@@ -9,10 +9,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import current_auth, get_device_store
-from app.errors import http_404
+from app.errors import http_404, http_409, http_422
 from app.protocol import PERM_START_SYNC
 from app.orchestration.dispatcher import CommandFailed, DeviceOffline, dispatch
-from app.schemas.sync import SyncCreateRequest, SyncSessionResponse
+from app.schemas.sync import (
+    SyncAcceptRequest, SyncCreateRequest, SyncSessionResponse,
+)
 from app.security.jwt import AuthContext
 from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
@@ -26,6 +28,30 @@ async def create_sync(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
+    # request addressed to a colleague by email/handle/id — they pick their
+    # destination folder when they accept; the session stays 'pending'.
+    if req.b_user:
+        target = await store.resolve_user(req.b_user)
+        if target is None:
+            raise http_422("no account matches that email or handle")
+        if target == auth.user_id:
+            raise http_409("that's your own account — choose one of your computers")
+        try:
+            await store.get_device(auth.user_id, req.a_device_id)
+        except DeviceNotFound:
+            raise http_404("device not found")
+        session = await store.create_sync(
+            auth.user_id, req.a_device_id, req.a_path, None, None, req.mode,
+            state="pending", pending_user_id=target,
+        )
+        await log_activity(store, auth.user_id, "sync.requested",
+                           target=session["name"],
+                           metadata={"to": req.b_user})
+        return session
+
+    if not req.b_device_id or not req.b_path:
+        raise http_422("choose a folder on each side, or enter a colleague's email")
+
     owned = 0
     for device_id, path in ((req.a_device_id, req.a_path), (req.b_device_id, req.b_path)):
         try:
@@ -66,6 +92,8 @@ async def _start_agents(
     session: dict, mode: str, actor_id: str, store: DeviceStore
 ) -> None:
     """Dispatch start_sync to each participant agent with ITS OWN root."""
+    if len(session["participants"]) < 2:
+        return
     for p in session["participants"]:
         peer = next(q["device_id"] for q in session["participants"]
                     if q["device_id"] != p["device_id"])
@@ -89,10 +117,13 @@ async def sync_requests(
     store: DeviceStore = Depends(get_device_store),
 ):
     """Pending sessions that need MY acceptance — I own a participant
-    device but didn't create the session."""
+    device but didn't create the session, or it was addressed to me."""
     out = []
     for s in await store.list_sync(auth.user_id):
         if s["state"] != "pending" or s["created_by"] == auth.user_id:
+            continue
+        if s.get("pending_user_id") == auth.user_id:
+            out.append({**s, "needs_folder": True})
             continue
         for p in s["participants"]:
             try:
@@ -107,9 +138,26 @@ async def sync_requests(
 @router.post("/{session_id}/accept", response_model=SyncSessionResponse)
 async def accept_sync(
     session_id: str,
+    body: SyncAcceptRequest | None = None,
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
+    try:
+        session = await store.get_sync(session_id)
+    except DeviceNotFound:
+        raise http_404("sync session not found")
+    if session.get("pending_user_id"):
+        # request addressed to me: I choose which of my folders receives it
+        if session["pending_user_id"] != auth.user_id:
+            raise http_404("sync session not found")
+        if body is None:
+            raise http_422("choose a folder on your computer to sync into")
+        try:
+            await store.get_device(auth.user_id, body.device_id)
+        except DeviceNotFound:
+            raise http_404("device not found")
+        session = await store.add_sync_participant(
+            session_id, body.device_id, body.root_path)
     try:
         session = await store.set_sync_state(auth.user_id, session_id, "active")
     except DeviceNotFound:

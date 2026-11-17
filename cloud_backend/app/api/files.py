@@ -318,7 +318,8 @@ async def download(
 async def _download_response(queue, dispatch_task, transfer_id):
     """Wait for TRANSFER_BEGIN so we can set filename/size headers."""
     import asyncio
-    first: Envelope = await asyncio.wait_for(queue.get(), timeout=30)
+    # zip creation on folders can take a while before BEGIN arrives
+    first: Envelope = await asyncio.wait_for(queue.get(), timeout=TRANSFER_TIMEOUT)
     if first.type is not MessageType.TRANSFER_BEGIN:
         transfers.unregister(transfer_id)
         raise CommandFailed("agent did not begin transfer")

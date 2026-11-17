@@ -287,6 +287,19 @@ export default function PermissionsPage() {
       .then(load).catch(() => {});
   }
 
+  async function upgradeAccess() {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      await apiFetch(`/api/v1/devices/${selected.deviceId}/folders`, token!, {
+        method: "PATCH",
+        body: JSON.stringify({ path: selected.path, access: "readwrite" }),
+      });
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "could not change access"); }
+    finally { setBusy(false); }
+  }
+
   async function stopSharing(s: SharedFolder) {
     setConfirmStop(null);
     await apiFetch(`/api/v1/sharing/${s.id}`, token!, { method: "DELETE" });
@@ -546,11 +559,17 @@ export default function PermissionsPage() {
                   <div className="mt-0.5 text-xs text-[var(--color-text-dim)]">
                     {selected.path} · on {selected.deviceName}
                   </div>
-                  <div className="mt-2">
+                  <div className="mt-2 flex items-center gap-2">
                     {selected.access === "readwrite" ? (
                       <span className="badge badge-purple">Full access on device</span>
                     ) : selected.access === "read" ? (
-                      <span className="badge badge-gray">Read-only on device</span>
+                      <>
+                        <span className="badge badge-gray">Read-only on device</span>
+                        <button className="text-[11px] text-[var(--color-accent)] hover:underline"
+                          disabled={busy} onClick={upgradeAccess}>
+                          Switch to Full access
+                        </button>
+                      </>
                     ) : (
                       <span className="badge badge-amber">Device offline — access unverified</span>
                     )}
@@ -592,6 +611,9 @@ export default function PermissionsPage() {
                         </td>
                         <td className="px-4 py-3">
                           <select className="input !py-1 text-xs capitalize"
+                            title={selectedReadOnly
+                              ? "Folder is read-only on the device — switch it to Full access to unlock Editor/Manager"
+                              : undefined}
                             value={bitsToRole(g.permissions_granted)}
                             onChange={(e) => changeRole(g, e.target.value)}>
                             {ROLES.map((r) => (

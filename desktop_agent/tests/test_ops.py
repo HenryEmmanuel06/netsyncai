@@ -157,6 +157,26 @@ async def test_download_streams_verified_chunks(rw_ctx, sample_tree, sent):
     assert hashlib.sha256(body).hexdigest() == end.payload["sha256"]
 
 
+async def test_download_dir_streams_zip(rw_ctx, sample_tree, sent):
+    await HANDLERS["download_file"](
+        rw_ctx, {"path": str(sample_tree / "docs"), "transfer_id": "tz"}
+    )
+    envs = sent.msgs
+    begin = envs[0]
+    assert begin.type is MessageType.TRANSFER_BEGIN
+    assert begin.payload["name"] == "docs.zip"
+    body = b"".join(
+        base64.b64decode(e.payload["data"])
+        for e in envs if e.type is MessageType.TRANSFER_CHUNK
+    )
+    end = next(e for e in envs if e.type is MessageType.TRANSFER_END)
+    assert hashlib.sha256(body).hexdigest() == end.payload["sha256"]
+    import io, zipfile
+    with zipfile.ZipFile(io.BytesIO(body)) as z:
+        names = z.namelist()
+    assert "docs/report.pdf" in names and "docs/proposal.docx" in names
+
+
 async def test_send_file_writes_atomically(rw_ctx, sample_tree, sent):
     payload = b"hello upload " * 5000
     digest = hashlib.sha256(payload).hexdigest()

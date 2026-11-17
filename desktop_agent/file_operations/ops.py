@@ -16,6 +16,8 @@ import os
 import platform
 import shutil
 import sqlite3
+import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -141,46 +143,80 @@ async def op_search_files(ctx: AgentContext, args: dict) -> dict:
     }
 
 
+def _zip_dir(root: Path, dest: Path) -> None:
+    """Zip a directory for transfer. The top folder is included in the
+    archive names; hidden/partial artefacts are skipped."""
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [
+                d for d in dirnames
+                if d != PARTIAL_DIR and not d.startswith(("$", "."))
+            ]
+            for fn in filenames:
+                if fn.startswith(("$", ".")):
+                    continue
+                full = Path(dirpath) / fn
+                try:
+                    z.write(full, full.relative_to(root.parent))
+                except OSError:
+                    continue
+
+
 async def op_download_file(ctx: AgentContext, args: dict) -> dict:
     from protocol import Envelope, MessageType, TransferBegin, TransferChunk, TransferEnd
 
     transfer_id = args["transfer_id"]
     path = ctx.check_path(args["path"])
-    if not path.is_file():
-        raise OpDenied("not a file")
+    src, name, tmp = path, path.name, None
+    if path.is_dir():
+        # folders transfer as a zip built in the agent's data dir
+        base = ctx.data_dir if ctx.data_dir and ctx.data_dir.is_dir() \
+            else Path(tempfile.gettempdir())
+        tmp = base / f".netsync-{transfer_id}.zip"
+        try:
+            await asyncio.to_thread(_zip_dir, path, tmp)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            raise OpDenied(f"could not zip folder: {exc}") from exc
+        src, name = tmp, f"{path.name}.zip"
+    if not src.is_file():
+        raise OpDenied("not a file or folder")
 
-    # pre-hash so BEGIN announces the real digest (verified by receiver)
-    size = path.stat().st_size
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(CHUNK), b""):
-            h.update(chunk)
-    digest = h.hexdigest()
+    try:
+        # pre-hash so BEGIN announces the real digest (verified by receiver)
+        size = src.stat().st_size
+        h = hashlib.sha256()
+        with src.open("rb") as f:
+            for chunk in iter(lambda: f.read(CHUNK), b""):
+                h.update(chunk)
+        digest = h.hexdigest()
 
-    await ctx.send(Envelope(
-        type=MessageType.TRANSFER_BEGIN,
-        payload=TransferBegin(
-            transfer_id=transfer_id, direction="pull",
-            name=path.name, size=size, sha256=digest,
-        ).model_dump(),
-    ).model_dump_json())
+        await ctx.send(Envelope(
+            type=MessageType.TRANSFER_BEGIN,
+            payload=TransferBegin(
+                transfer_id=transfer_id, direction="pull",
+                name=name, size=size, sha256=digest,
+            ).model_dump(),
+        ).model_dump_json())
 
-    seq = 0
-    with path.open("rb") as f:
-        while chunk := f.read(CHUNK):
-            h.update(chunk)
-            await ctx.send(Envelope(
-                type=MessageType.TRANSFER_CHUNK,
-                payload=TransferChunk(
-                    transfer_id=transfer_id, seq=seq,
-                    data=base64.b64encode(chunk).decode(),
-                ).model_dump(),
-            ).model_dump_json())
-            seq += 1
-    await ctx.send(Envelope(
-        type=MessageType.TRANSFER_END,
-        payload=TransferEnd(transfer_id=transfer_id, seq=seq, sha256=digest).model_dump(),
-    ).model_dump_json())
+        seq = 0
+        with src.open("rb") as f:
+            while chunk := f.read(CHUNK):
+                await ctx.send(Envelope(
+                    type=MessageType.TRANSFER_CHUNK,
+                    payload=TransferChunk(
+                        transfer_id=transfer_id, seq=seq,
+                        data=base64.b64encode(chunk).decode(),
+                    ).model_dump(),
+                ).model_dump_json())
+                seq += 1
+        await ctx.send(Envelope(
+            type=MessageType.TRANSFER_END,
+            payload=TransferEnd(transfer_id=transfer_id, seq=seq, sha256=digest).model_dump(),
+        ).model_dump_json())
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     return {"transfer_id": transfer_id, "size": size, "sha256": digest}
 
 

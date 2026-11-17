@@ -346,28 +346,29 @@ class SupabaseDeviceStore:
 
     async def create_sync(
         self, owner_id: str, a_device_id: str, a_path: str,
-        b_device_id: str, b_path: str, mode: str,
-        state: str = "active",
+        b_device_id: str | None, b_path: str | None, mode: str,
+        state: str = "active", pending_user_id: str | None = None,
     ) -> dict:
+        name = " ↔ ".join(p for p in (a_path, b_path) if p)
         r = await self._client.post(
             "/sync_sessions",
             json={
-                "name": f"{a_path} ↔ {b_path}",
+                "name": name,
                 "mode": mode, "state": state, "created_by": owner_id,
+                "pending_user_id": pending_user_id,
             },
         )
         r.raise_for_status()
         session = r.json()[0]
-        await self._client.post(
-            "/sync_participants",
-            json=[
-                {"session_id": session["id"], "device_id": a_device_id, "root_path": a_path},
-                {"session_id": session["id"], "device_id": b_device_id, "root_path": b_path},
-            ],
-        )
+        rows = [{"session_id": session["id"], "device_id": a_device_id,
+                 "root_path": a_path}]
+        if b_device_id is not None:
+            rows.append({"session_id": session["id"], "device_id": b_device_id,
+                         "root_path": b_path})
+        await self._client.post("/sync_participants", json=rows)
         session["participants"] = [
-            {"device_id": a_device_id, "root": a_path},
-            {"device_id": b_device_id, "root": b_path},
+            {"device_id": row["device_id"], "root": row["root_path"]}
+            for row in rows
         ]
         return session
 
@@ -415,13 +416,48 @@ class SupabaseDeviceStore:
                 sessions.setdefault(
                     s["id"], self._sync_row(s, s.get("sync_participants", []))
                 )
+
+        # requests addressed to me that haven't picked my side yet
+        r = await self._client.get(
+            "/sync_sessions",
+            params={"pending_user_id": f"eq.{owner_id}",
+                    "select": "*,sync_participants(*)"},
+        )
+        r.raise_for_status()
+        for s in r.json():
+            sessions.setdefault(
+                s["id"], self._sync_row(s, s.get("sync_participants", []))
+            )
         return list(sessions.values())
 
     async def _can_control_sync(self, actor_id: str, session: dict) -> bool:
         if session["created_by"] == actor_id:
             return True
+        if session.get("pending_user_id") == actor_id:
+            return True
         my_devices = {d.id for d in await self.list_devices(actor_id)}
         return any(p["device_id"] in my_devices for p in session["participants"])
+
+    async def add_sync_participant(
+        self, session_id: str, device_id: str, root_path: str
+    ) -> dict:
+        r = await self._client.post(
+            "/sync_participants",
+            json={"session_id": session_id, "device_id": device_id,
+                  "root_path": root_path},
+        )
+        r.raise_for_status()
+        session = await self.get_sync(session_id)
+        await self._client.patch(
+            "/sync_sessions",
+            params={"id": f"eq.{session_id}"},
+            json={
+                "pending_user_id": None,
+                "name": " ↔ ".join(p["root"] for p in session["participants"]),
+                "updated_at": _now().isoformat(),
+            },
+        )
+        return await self.get_sync(session_id)
 
     async def set_sync_state(self, actor_id: str, session_id: str, state: str) -> dict:
         session = await self.get_sync(session_id)

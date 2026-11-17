@@ -36,6 +36,7 @@ export interface SyncSession {
   mode: string;
   state: string;
   created_by: string;
+  pending_user_id?: string | null;
   participants: SyncParticipant[];
 }
 

@@ -74,11 +74,16 @@ class DeviceStore(Protocol):
     # ── sync sessions ──
     async def create_sync(
         self, owner_id: str, a_device_id: str, a_path: str,
-        b_device_id: str, b_path: str, mode: str,
-        state: str = "active",
+        b_device_id: str | None, b_path: str | None, mode: str,
+        state: str = "active", pending_user_id: str | None = None,
     ) -> dict: ...
     async def list_sync(self, owner_id: str) -> list[dict]: ...
     async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict: ...
+    async def add_sync_participant(
+        self, session_id: str, device_id: str, root_path: str
+    ) -> dict:
+        """Join the accepting user's side to a pending request session."""
+        ...
     async def get_sync_participants(self, session_id: str) -> list[dict]: ...
     async def get_active_syncs_for_device(self, device_id: str) -> list[dict]: ...
 
@@ -350,21 +355,22 @@ class InMemoryDeviceStore:
 
     async def create_sync(
         self, owner_id: str, a_device_id: str, a_path: str,
-        b_device_id: str, b_path: str, mode: str,
-        state: str = "active",
+        b_device_id: str | None, b_path: str | None, mode: str,
+        state: str = "active", pending_user_id: str | None = None,
     ) -> dict:
         session_id = str(uuid.uuid4())
+        participants = [{"device_id": a_device_id, "root": a_path}]
+        if b_device_id is not None:
+            participants.append({"device_id": b_device_id, "root": b_path})
         session = {
             "id": session_id,
-            "name": f"{a_path} ↔ {b_path}",
+            "name": " ↔ ".join(p["root"] for p in participants),
             "mode": mode,
             "state": state,
             "created_by": owner_id,
             "created_at": _now(),
-            "participants": [
-                {"device_id": a_device_id, "root": a_path},
-                {"device_id": b_device_id, "root": b_path},
-            ],
+            "pending_user_id": pending_user_id,
+            "participants": participants,
         }
         if not hasattr(self, "_sync"):
             self._sync = {}
@@ -378,11 +384,13 @@ class InMemoryDeviceStore:
         return s
 
     async def list_sync(self, owner_id: str) -> list[dict]:
-        # sessions I created OR that involve one of my devices
+        # sessions I created, that involve one of my devices, or that were
+        # addressed to me and are waiting for my acceptance
         mine = {d["id"] for d in self._devices.values() if d["owner_id"] == owner_id}
         return [
             s for s in getattr(self, "_sync", {}).values()
             if s["created_by"] == owner_id
+            or s.get("pending_user_id") == owner_id
             or any(p["device_id"] in mine for p in s["participants"])
         ]
 
@@ -390,12 +398,24 @@ class InMemoryDeviceStore:
         s = getattr(self, "_sync", {}).get(session_id)
         if not s:
             raise DeviceNotFound(session_id)
-        if s["created_by"] != actor_id and not any(
+        if s["created_by"] != actor_id and s.get("pending_user_id") != actor_id and not any(
             self._devices.get(p["device_id"], {}).get("owner_id") == actor_id
             for p in s["participants"]
         ):
             raise DeviceNotFound(session_id)  # can't even see the session
         s["state"] = state
+        return s
+
+    async def add_sync_participant(
+        self, session_id: str, device_id: str, root_path: str
+    ) -> dict:
+        s = getattr(self, "_sync", {}).get(session_id)
+        if not s:
+            raise DeviceNotFound(session_id)
+        if all(p["device_id"] != device_id for p in s["participants"]):
+            s["participants"].append({"device_id": device_id, "root": root_path})
+        s["pending_user_id"] = None
+        s["name"] = " ↔ ".join(p["root"] for p in s["participants"])
         return s
 
     async def get_sync_participants(self, session_id: str) -> list[dict]:

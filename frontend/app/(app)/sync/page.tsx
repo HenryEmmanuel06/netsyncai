@@ -161,6 +161,99 @@ function folderMeta(f: SharedFolderInfo) {
   return f.file_count ? `${f.file_count} · ${formatBytes(f.total_size)}` : undefined;
 }
 
+type SyncRequest = SyncSession & {
+  my_device_name?: string; my_root?: string; needs_folder?: boolean;
+};
+
+/** Incoming sync-request banner. Requests addressed to the recipient by
+ *  email need them to pick the local folder before accepting. */
+function RequestCard({ r, devices, token, onRespond }: {
+  r: SyncRequest; devices: Device[]; token: string;
+  onRespond: (id: string, accept: boolean,
+              dest?: { device_id: string; root_path: string }) => void;
+}) {
+  const [dev, setDev] = useState("");
+  const [folders, setFolders] = useState<SharedFolderInfo[] | null>(null);
+  const [root, setRoot] = useState("");
+
+  useEffect(() => {
+    if (!dev || !token) { setFolders(null); return; }
+    setFolders(null);
+    apiFetch<{ folders: SharedFolderInfo[] }>(
+      `/api/v1/devices/${dev}/folders`, token)
+      .then((x) => setFolders(x.folders.filter((f) => f.access === "readwrite")))
+      .catch(() => setFolders([]));
+  }, [dev, token]);
+
+  const src = basename(r.name.split("↔")[0]?.trim() || r.name);
+
+  return (
+    <div className="pop-in relative mb-4 overflow-hidden rounded-2xl bg-gradient-to-r from-[rgba(139,92,246,0.55)] via-[rgba(192,107,255,0.35)] to-[rgba(255,154,61,0.45)] p-px">
+      <div className="rounded-[15px] bg-[var(--color-surface)] p-4">
+        <div className="flex flex-wrap items-center gap-4">
+          <FolderArt size={48} tone="blue" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Sync request</span>
+              <span className="badge badge-purple">New</span>
+            </div>
+            <div className="mt-1 text-xs leading-relaxed text-[var(--color-text-dim)]">
+              {r.needs_folder ? (
+                <>
+                  A colleague wants to sync <span className="font-medium text-[var(--color-text)]">{src}</span> with you.
+                  Pick a folder on your PC to receive it, then accept — their content downloads there and stays in sync.
+                </>
+              ) : (
+                <>
+                  A colleague wants to sync <span className="font-medium text-[var(--color-text)]">{src}</span>
+                  {" "}with <span className="font-medium text-[var(--color-text)]">{basename(r.my_root ?? "")}</span> on {r.my_device_name}.
+                  Accepting downloads their content to your PC and keeps it in sync.
+                </>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button className="btn btn-ghost" onClick={() => onRespond(r.id, false)}>Decline</button>
+            <button className="btn btn-primary"
+              disabled={!!r.needs_folder && !root}
+              onClick={() => onRespond(r.id, true,
+                r.needs_folder && root ? { device_id: dev, root_path: root } : undefined)}>
+              <Check size={14} /> Accept & sync
+            </button>
+          </div>
+        </div>
+
+        {r.needs_folder && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-3">
+            <Monitor size={13} className="text-[var(--color-text-faint)]" />
+            <select className="input !w-auto !py-1.5 text-xs" value={dev}
+              onChange={(e) => { setDev(e.target.value); setRoot(""); }}>
+              <option value="">Your computer…</option>
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}{d.status !== "online" ? " (offline)" : ""}</option>
+              ))}
+            </select>
+            {dev && (
+              folders === null ? <Spinner size={14} /> : (
+                <select className="input !w-auto min-w-56 !py-1.5 text-xs" value={root}
+                  onChange={(e) => setRoot(e.target.value)}>
+                  <option value="">Shared folder to sync into…</option>
+                  {folders.map((f) => (
+                    <option key={f.path} value={f.path}>{f.label || basename(f.path)}</option>
+                  ))}
+                  {folders.length === 0 && (
+                    <option disabled>No read &amp; write folders — share one under Devices first</option>
+                  )}
+                </select>
+              )
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SyncPage() {
   const { token } = useAuth();
   const [sessions, setSessions] = useState<SyncSession[] | null>(null);
@@ -180,7 +273,7 @@ export default function SyncPage() {
   const [colleagueEmail, setColleagueEmail] = useState("");
   const [stopTarget, setStopTarget] = useState<SyncSession | null>(null);
   const [tab, setTab] = useState<"active" | "paused" | "stopped">("active");
-  const [requests, setRequests] = useState<(SyncSession & { my_device_name?: string; my_root?: string })[]>([]);
+  const [requests, setRequests] = useState<SyncRequest[]>([]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -188,7 +281,7 @@ export default function SyncPage() {
       apiFetch<SyncSession[]>("/api/v1/sync", token),
       apiFetch<Device[]>("/api/v1/devices", token),
       apiFetch<{ granted: SharedFolder[] }>("/api/v1/sharing", token).catch(() => ({ granted: [] })),
-      apiFetch<{ requests: (SyncSession & { my_device_name?: string; my_root?: string })[] }>(
+      apiFetch<{ requests: SyncRequest[] }>(
         "/api/v1/sync/requests", token).catch(() => ({ requests: [] })),
     ]);
     setSessions(s);
@@ -230,17 +323,27 @@ export default function SyncPage() {
   }
 
   async function create() {
-    const bDev = bKind === "mine" ? bDevice : shares.find((s) => `share:${s.id}` === bPath)?.device_id;
-    const bRoot = bKind === "mine" ? bPath : shares.find((s) => `share:${s.id}` === bPath)?.root_path;
-    if (!aDevice || !aPath || !bDev || !bRoot) return;
+    if (!aDevice || !aPath) return;
+    let body: Record<string, unknown>;
+    if (bKind === "mine") {
+      if (!bDevice || !bPath) return;
+      body = { a_device_id: aDevice, a_path: aPath,
+               b_device_id: bDevice, b_path: bPath, mode };
+    } else if (bShare) {
+      // they've granted me sync access on this folder — sync straight into it
+      body = { a_device_id: aDevice, a_path: aPath,
+               b_device_id: bShare.device_id, b_path: bShare.root_path, mode };
+    } else {
+      // send the request by email — they choose their folder on accept
+      if (!emailOk) return;
+      body = { a_device_id: aDevice, a_path: aPath,
+               b_user: colleagueEmail.trim(), mode };
+    }
     setBusy(true); setError(null);
     try {
       await apiFetch("/api/v1/sync", token!, {
         method: "POST",
-        body: JSON.stringify({
-          a_device_id: aDevice, a_path: aPath,
-          b_device_id: bDev, b_path: bRoot, mode,
-        }),
+        body: JSON.stringify(body),
       });
       setCreateOpen(false);
       setAPath(""); setBPath(""); setColleagueEmail("");
@@ -249,10 +352,12 @@ export default function SyncPage() {
     finally { setBusy(false); }
   }
 
-  async function respondToRequest(id: string, accept: boolean) {
+  async function respondToRequest(
+    id: string, accept: boolean, dest?: { device_id: string; root_path: string },
+  ) {
     try {
       await apiFetch(`/api/v1/sync/${id}/${accept ? "accept" : "decline"}`,
-        token!, { method: "POST" });
+        token!, { method: "POST", body: dest ? JSON.stringify(dest) : undefined });
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "failed"); }
   }
@@ -281,10 +386,11 @@ export default function SyncPage() {
 
   const aLabel = aFolders?.find((f) => f.path === aPath);
   const bShare = shares.find((s) => `share:${s.id}` === bPath);
+  const emailOk = /^\S+@\S+\.\S+$|^@[\w.-]+$/.test(colleagueEmail.trim());
   const bLabel = bKind === "mine"
     ? bFolders?.find((f) => f.path === bPath)?.label || basename(bPath)
-    : bShare?.label || basename(bShare?.root_path ?? "");
-  const ready = !!aPath && !!bPath;
+    : bShare?.label || basename(bShare?.root_path ?? "") || colleagueEmail.trim();
+  const ready = !!aPath && (bKind === "mine" ? !!bPath : !!bPath || emailOk);
 
   return (
     <div>
@@ -304,28 +410,8 @@ export default function SyncPage() {
 
       {/* incoming sync requests — what the other user sees */}
       {requests.map((r) => (
-        <div key={r.id} className="pop-in relative mb-4 overflow-hidden rounded-2xl bg-gradient-to-r from-[rgba(139,92,246,0.55)] via-[rgba(192,107,255,0.35)] to-[rgba(255,154,61,0.45)] p-px">
-          <div className="flex flex-wrap items-center gap-4 rounded-[15px] bg-[var(--color-surface)] p-4">
-            <FolderArt size={48} tone="blue" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold">Sync request</span>
-                <span className="badge badge-purple">New</span>
-              </div>
-              <div className="mt-1 text-xs leading-relaxed text-[var(--color-text-dim)]">
-                A colleague wants to sync <span className="font-medium text-[var(--color-text)]">{basename(r.name.split("↔")[0]?.trim() || r.name)}</span>
-                {" "}with <span className="font-medium text-[var(--color-text)]">{basename(r.my_root ?? "")}</span> on {r.my_device_name}.
-                Accepting downloads their content to your PC and keeps it in sync.
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button className="btn btn-ghost" onClick={() => respondToRequest(r.id, false)}>Decline</button>
-              <button className="btn btn-primary" onClick={() => respondToRequest(r.id, true)}>
-                <Check size={14} /> Accept & sync
-              </button>
-            </div>
-          </div>
-        </div>
+        <RequestCard key={r.id} r={r} devices={devices} token={token!}
+          onRespond={respondToRequest} />
       ))}
 
       {sessions !== null && sessions.length > 0 && (
@@ -370,7 +456,7 @@ export default function SyncPage() {
               <span className="mr-auto min-w-0 truncate text-xs text-[var(--color-text-faint)]">
                 {ready
                   ? <><span className="text-[var(--color-text)]">{aLabel?.label || basename(aPath)}</span> ↔ <span className="text-[var(--color-text)]">{bLabel}</span>{bKind === "colleague" && " · needs their approval"}</>
-                  : "Choose a folder on both sides"}
+                  : bKind === "colleague" ? "Choose your folder and enter their email" : "Choose a folder on both sides"}
               </span>
               <button className="btn btn-ghost" onClick={() => setCreateOpen(false)}>Cancel</button>
               <button className="btn btn-primary" disabled={busy || !ready} onClick={create}>
@@ -379,9 +465,9 @@ export default function SyncPage() {
               </button>
             </>
           }>
-          <div className="grid items-stretch gap-3 md:grid-cols-[1fr_auto_1fr]">
+          <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
             {/* side A */}
-            <div className="well space-y-3 p-3.5">
+            <div className="well min-w-0 space-y-3 p-3.5">
               <div className="flex items-center gap-2">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-primary)] text-[10px] font-bold text-white">1</span>
                 <span className="text-[13px] font-semibold">Your folder</span>
@@ -426,8 +512,8 @@ export default function SyncPage() {
             </div>
 
             {/* side B */}
-            <div className="well space-y-3 p-3.5">
-              <div className="flex items-center justify-between gap-2">
+            <div className="well min-w-0 space-y-3 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-primary)] text-[10px] font-bold text-white">2</span>
                   <span className="text-[13px] font-semibold">Sync with</span>
@@ -482,9 +568,9 @@ export default function SyncPage() {
                     </label>
                   </Field>
                   <div>
-                    <label className="field-label">Their shared folder or file</label>
+                    <label className="field-label">Their shared folder or file <span className="font-normal normal-case text-[var(--color-text-faint)]">(optional)</span></label>
                     <FolderList empty={filteredShares.length ? undefined
-                      : shares.length ? "No folders from that email." : "Nobody has given you sync access yet — they need to grant you the Manager role on a shared folder."}>
+                      : "No folders yet — that's fine, just send the request and they'll pick where it lands on their PC."}>
                       {filteredShares.map((s) => (
                         <FolderOption key={s.id} active={bPath === `share:${s.id}`}
                           onClick={() => setBPath(`share:${s.id}`)}
