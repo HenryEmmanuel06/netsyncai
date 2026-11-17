@@ -62,18 +62,50 @@ async def test_cross_account_sync_created_and_visible_to_both(
     })
     assert r.status_code == 201
     sid = r.json()["id"]
-    # offline agents → session lands in error state but exists
-    assert r.json()["state"] in ("active", "error")
+    # cross-account sessions start as pending requests — the colleague must
+    # accept before any agent starts syncing
+    assert r.json()["state"] == "pending"
 
-    # colleague sees it too (their device participates)
+    # colleague sees it in their session list AND their request inbox
     theirs_sessions = (await client.get("/api/v1/sync",
                                         headers=other_auth_headers)).json()
     assert [s["id"] for s in theirs_sessions] == [sid]
+    req = (await client.get("/api/v1/sync/requests",
+                            headers=other_auth_headers)).json()["requests"]
+    assert [q["id"] for q in req] == [sid]
+    # requester does NOT see their own request as incoming
+    mine_req = (await client.get("/api/v1/sync/requests",
+                                 headers=auth_headers)).json()["requests"]
+    assert mine_req == []
+
+    # the colleague accepts — agents are offline so it lands in error state
+    r = await client.post(f"/api/v1/sync/{sid}/accept", headers=other_auth_headers)
+    assert r.json()["state"] in ("active", "error")
+    # inbox clears once resolved
+    req = (await client.get("/api/v1/sync/requests",
+                            headers=other_auth_headers)).json()["requests"]
+    assert req == []
 
     # colleague (device owner) can pause it
     r = await client.post(f"/api/v1/sync/{sid}/pause", headers=other_auth_headers)
     assert r.status_code == 200
     assert r.json()["state"] == "paused"
+
+
+async def test_cross_account_sync_decline(
+    client, auth_headers, other_auth_headers
+):
+    mine, theirs = await _setup(client, auth_headers, other_auth_headers, bits=256 + 1)
+    sid = (await client.post("/api/v1/sync", headers=auth_headers, json={
+        "a_device_id": mine, "a_path": ROOT_MINE,
+        "b_device_id": theirs, "b_path": ROOT_THEIRS, "mode": "live",
+    })).json()["id"]
+    r = await client.post(f"/api/v1/sync/{sid}/decline", headers=other_auth_headers)
+    assert r.status_code == 200
+    assert r.json()["state"] == "stopped"
+    req = (await client.get("/api/v1/sync/requests",
+                            headers=other_auth_headers)).json()["requests"]
+    assert req == []
 
 
 async def test_cross_account_sync_hidden_from_strangers(

@@ -59,12 +59,13 @@ export interface SharedFolder {
   created_at?: string;
   permissions?: number;
   grant_id?: string;
+  owner_email?: string | null;
 }
 
 export interface LocalDirEntry {
   name: string;
   path: string;
-  kind: "dir" | "drive" | "quick";
+  kind: "dir" | "drive" | "quick" | "file";
   blocked?: string | null;
 }
 

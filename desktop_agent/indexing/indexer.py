@@ -76,6 +76,28 @@ def index_folder(
     stats = IndexStats()
     seen: set[str] = set()
 
+    if root.is_file():
+        # a registered "folder" may be a single shared file — index just it
+        try:
+            st = root.stat()
+            digest = sha256_file(root) if st.st_size <= HASH_MAX_SIZE else None
+            existing = conn.execute(
+                "SELECT id FROM files WHERE folder_id = ? AND rel_path = ? AND deleted = 0",
+                (folder_id, root.name),
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO files (folder_id, file_id, rel_path, name, ext, size, mtime, sha256) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (folder_id, str(uuid.uuid4()), root.name, root.name,
+                     root.suffix.lower(), st.st_size, st.st_mtime, digest),
+                )
+                conn.commit()
+                stats.added += 1
+        except OSError:
+            stats.skipped += 1
+        return stats
+
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in ignores]
         for fname in filenames:

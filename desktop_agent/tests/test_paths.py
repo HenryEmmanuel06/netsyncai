@@ -66,8 +66,15 @@ def test_removed_root_denied(roots):
     assert not ar.is_allowed(allowed / "file.txt")
 
 
-def test_nondir_root_rejected(tmp_path):
+def test_missing_root_rejected(tmp_path):
+    with pytest.raises(PathSecurityError):
+        AllowedRoots([tmp_path / "nonexistent"])
+
+
+def test_file_root_allows_the_file_only(tmp_path):
+    """A single file may be registered as an allowed root (share-a-file)."""
     f = tmp_path / "afile"
     f.write_text("x")
-    with pytest.raises(PathSecurityError):
-        AllowedRoots([f])
+    ar = AllowedRoots([f])
+    assert ar.is_allowed(f)
+    assert not ar.is_allowed(tmp_path / "other.txt")

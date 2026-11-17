@@ -41,31 +41,95 @@ async def create_sync(
     if owned == 0:
         raise http_404("device not found")
 
+    # sessions involving someone else's computer need their acceptance —
+    # created 'pending'; the other side's dashboard shows an accept/decline
+    # request and only then do the agents start.
+    needs_accept = owned < 2
     session = await store.create_sync(
         auth.user_id, req.a_device_id, req.a_path,
         req.b_device_id, req.b_path, req.mode,
+        state="pending" if needs_accept else "active",
     )
 
-    # start_sync on each agent with ITS OWN root; failures roll the session
-    # back to error state rather than leaving a half-synced pair
-    for device_id, root, peer in (
-        (req.a_device_id, req.a_path, req.b_device_id),
-        (req.b_device_id, req.b_path, req.a_device_id),
-    ):
+    if needs_accept:
+        await log_activity(store, auth.user_id, "sync.requested",
+                           target=session["name"])
+        return session
+
+    await _start_agents(session, req.mode, auth.user_id, store)
+    await log_activity(store, auth.user_id, "sync.started", target=session["name"],
+                       metadata={"state": session["state"], "mode": req.mode})
+    return session
+
+
+async def _start_agents(
+    session: dict, mode: str, actor_id: str, store: DeviceStore
+) -> None:
+    """Dispatch start_sync to each participant agent with ITS OWN root."""
+    for p in session["participants"]:
+        peer = next(q["device_id"] for q in session["participants"]
+                    if q["device_id"] != p["device_id"])
         try:
-            await dispatch(device_id, "start_sync", {
+            await dispatch(p["device_id"], "start_sync", {
                 "session_id": session["id"],
-                "root": root,
+                "root": p["root"],
                 "peer_device_id": peer,
-                "mode": req.mode,
+                "mode": mode,
             }, timeout=15)
         except (DeviceOffline, CommandFailed) as exc:
-            await store.set_sync_state(auth.user_id, session["id"], "error")
+            await store.set_sync_state(actor_id, session["id"], "error")
             session["state"] = "error"
             session["error"] = str(getattr(exc, "error", exc))
             break
-    await log_activity(store, auth.user_id, "sync.started", target=session["name"],
-                       metadata={"state": session["state"], "mode": req.mode})
+
+
+@router.get("/requests")
+async def sync_requests(
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    """Pending sessions that need MY acceptance — I own a participant
+    device but didn't create the session."""
+    out = []
+    for s in await store.list_sync(auth.user_id):
+        if s["state"] != "pending" or s["created_by"] == auth.user_id:
+            continue
+        for p in s["participants"]:
+            try:
+                dev = await store.get_device(auth.user_id, p["device_id"])
+                out.append({**s, "my_device_name": dev.name, "my_root": p["root"]})
+                break
+            except DeviceNotFound:
+                continue
+    return {"requests": out}
+
+
+@router.post("/{session_id}/accept", response_model=SyncSessionResponse)
+async def accept_sync(
+    session_id: str,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    try:
+        session = await store.set_sync_state(auth.user_id, session_id, "active")
+    except DeviceNotFound:
+        raise http_404("sync session not found")
+    await _start_agents(session, session.get("mode", "live"), auth.user_id, store)
+    await log_activity(store, auth.user_id, "sync.accepted", target=session["name"])
+    return session
+
+
+@router.post("/{session_id}/decline", response_model=SyncSessionResponse)
+async def decline_sync(
+    session_id: str,
+    auth: AuthContext = Depends(current_auth),
+    store: DeviceStore = Depends(get_device_store),
+):
+    try:
+        session = await store.set_sync_state(auth.user_id, session_id, "stopped")
+    except DeviceNotFound:
+        raise http_404("sync session not found")
+    await log_activity(store, auth.user_id, "sync.declined", target=session["name"])
     return session
 
 

@@ -84,6 +84,7 @@ class SyncRuntime:
     snapshot_replies: int = 0   # reply at most once per session → converge
     applied_ops: int = 0        # peer ops applied locally (progress metric)
     emitted_ops: int = 0        # local ops sent to peer
+    file_root: bool = False     # session syncs one file, not a folder
 
 
 class SyncEngine:
@@ -98,11 +99,13 @@ class SyncEngine:
         if session_id in self.sessions:
             return {"already_running": session_id}
         rt = SyncRuntime(session_id, root, peer, self.device_id, mode, self.ctx)
+        rt.file_root = root.is_file()
         self.sessions[session_id] = rt
 
         rt.observer = Observer()
+        watch_dir = root.parent if rt.file_root else root
         rt.observer.schedule(_Watcher(asyncio.get_running_loop(), rt.events),
-                             str(root), recursive=True)
+                             str(watch_dir), recursive=not rt.file_root)
         rt.observer.start()
         rt.drain_task = asyncio.create_task(self._drain(rt))
 
@@ -211,7 +214,13 @@ class SyncEngine:
 
     async def _send_snapshot(self, rt: SyncRuntime) -> None:
         entries = []
+        if rt.file_root and rt.root.is_file():
+            st = rt.root.stat()
+            entries.append({"rel_path": rt.root.name, "sha256": sha256_file(rt.root),
+                            "size": st.st_size, "mtime": st.st_mtime})
         for dirpath, dirnames, filenames in os.walk(rt.root):
+            if rt.file_root:
+                break
             dirnames[:] = [d for d in dirnames if d not in DEFAULT_IGNORES]
             for fname in filenames:
                 if fname in DEFAULT_IGNORES:
@@ -325,16 +334,10 @@ class SyncEngine:
             await self._apply_write(rt, pseudo, base_sha=entry["sha256"] if local_sha else None)
 
     async def _apply_delete(self, rt: SyncRuntime, ev: SyncEvent) -> None:
-        rel = ev.rel_path
-        # only delete files the sync created — never delete a file the
-        # peer never knew about (protects pre-existing local content)
-        if self._base_sha(rt, rel) is None:
-            return
-        target = (rt.root / rel).resolve()
-        if target.is_file():
-            self._mark_suppressed(rt, rel)
-            target.unlink()
-        self._clear_state(rt, rel)
+        # deletes do NOT propagate: a peer deleting a file never removes the
+        # local copy — the item just falls out of sync tracking.
+        self._clear_state(rt, ev.rel_path)
+        self._mark_suppressed(rt, ev.rel_path)
 
     async def _apply_rename(self, rt: SyncRuntime, ev: SyncEvent) -> None:
         # v1 emits delete+modify for moves, so RENAME events are a no-op
@@ -409,6 +412,9 @@ class SyncEngine:
     # ── helpers ──────────────────────────────────────────────────────────
 
     def _rel(self, rt: SyncRuntime, path: Path) -> str | None:
+        if rt.file_root:
+            # only events for the synced file itself count
+            return rt.root.name if path.resolve() == rt.root.resolve() else None
         try:
             return str(path.resolve().relative_to(rt.root.resolve()))
         except ValueError:
@@ -471,8 +477,8 @@ class SyncEngine:
 
 async def op_start_sync(ctx: "AgentContext", args: dict) -> dict:
     root = ctx.check_path(args["root"], write=True)
-    if not root.is_dir():
-        raise OpDenied("sync root is not a directory")
+    if not root.is_dir() and not root.is_file():
+        raise OpDenied("sync root must be a folder or file")
     return await ctx.sync.start(
         args["session_id"], root, args["peer_device_id"], args.get("mode", "live")
     )

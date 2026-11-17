@@ -31,8 +31,8 @@ class AllowedRoots:
 
     def add(self, root: str | Path) -> Path:
         p = Path(root).resolve()
-        if not p.is_dir():
-            raise PathSecurityError(f"root is not a directory: {root}")
+        if not p.is_dir() and not p.is_file():
+            raise PathSecurityError(f"root does not exist: {root}")
         if _norm(p) not in {_norm(r) for r in self._roots}:
             self._roots.append(p)
         return p
@@ -47,6 +47,8 @@ class AllowedRoots:
 
     def _containing_root(self, resolved: Path) -> Path | None:
         for root in self._roots:
+            if resolved == root:
+                return root      # a root may itself be a shared file
             try:
                 resolved.relative_to(root)
                 return root

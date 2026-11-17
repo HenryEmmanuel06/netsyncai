@@ -69,13 +69,15 @@ async def _owner(device_id: str, auth: AuthContext, store: DeviceStore):
 async def local_dirs(
     device_id: str,
     path: str = "",
+    files: int = 0,
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
-    """Directory picker: drives/quick locations, then subfolders. Folder
-    names only — never files."""
+    """Directory picker: drives/quick locations, then subfolders.
+    `files=1` additionally lists files (needed for share-a-file picking)."""
     await _owner(device_id, auth, store)
-    return await dispatch(device_id, "list_local_dirs", {"path": path})
+    return await dispatch(device_id, "list_local_dirs",
+                          {"path": path, "files": bool(files)})
 
 
 @router.get("/folders")

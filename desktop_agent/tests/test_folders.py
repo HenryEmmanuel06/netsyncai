@@ -117,8 +117,16 @@ async def test_add_rejects_bad_access(ctx, sample_tree):
 
 
 async def test_add_rejects_missing_dir(ctx, tmp_path):
-    with pytest.raises(OpDenied, match="not a directory"):
+    with pytest.raises(OpDenied, match="not a file or folder"):
         await FOLDER_HANDLERS["add_folder"](ctx, {"path": str(tmp_path / "nope")})
+
+
+async def test_add_file_share(ctx, sample_tree, allow_tmp):
+    """A single file can be shared — it's registered and indexed as itself."""
+    f = sample_tree / "README.md"
+    r = await FOLDER_HANDLERS["add_folder"](ctx, {"path": str(f), "access": "read"})
+    assert r["path"] == str(f.resolve())
+    assert r["label"] == "README.md"
 
 
 async def test_set_access_downgrade_blocks_writes(ctx, sample_tree, allow_tmp):

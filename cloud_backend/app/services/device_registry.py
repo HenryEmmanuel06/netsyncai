@@ -75,6 +75,7 @@ class DeviceStore(Protocol):
     async def create_sync(
         self, owner_id: str, a_device_id: str, a_path: str,
         b_device_id: str, b_path: str, mode: str,
+        state: str = "active",
     ) -> dict: ...
     async def list_sync(self, owner_id: str) -> list[dict]: ...
     async def set_sync_state(self, owner_id: str, session_id: str, state: str) -> dict: ...
@@ -350,13 +351,14 @@ class InMemoryDeviceStore:
     async def create_sync(
         self, owner_id: str, a_device_id: str, a_path: str,
         b_device_id: str, b_path: str, mode: str,
+        state: str = "active",
     ) -> dict:
         session_id = str(uuid.uuid4())
         session = {
             "id": session_id,
             "name": f"{a_path} ↔ {b_path}",
             "mode": mode,
-            "state": "active",
+            "state": state,
             "created_by": owner_id,
             "created_at": _now(),
             "participants": [

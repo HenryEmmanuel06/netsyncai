@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeftRight, Monitor, Pause, Play, Plus, RefreshCw, ServerCrash,
+  ArrowLeftRight, Check, Monitor, Pause, Play, Plus, RefreshCw, ServerCrash,
   Square, Users,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -59,19 +59,24 @@ export default function SyncPage() {
   const [mode, setMode] = useState("live");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [colleagueEmail, setColleagueEmail] = useState("");
   const [stopTarget, setStopTarget] = useState<SyncSession | null>(null);
   const [tab, setTab] = useState<"active" | "paused" | "stopped">("active");
+  const [requests, setRequests] = useState<(SyncSession & { my_device_name?: string; my_root?: string })[]>([]);
 
   const load = useCallback(async () => {
     if (!token) return;
-    const [s, d, sh] = await Promise.all([
+    const [s, d, sh, req] = await Promise.all([
       apiFetch<SyncSession[]>("/api/v1/sync", token),
       apiFetch<Device[]>("/api/v1/devices", token),
       apiFetch<{ granted: SharedFolder[] }>("/api/v1/sharing", token).catch(() => ({ granted: [] })),
+      apiFetch<{ requests: (SyncSession & { my_device_name?: string; my_root?: string })[] }>(
+        "/api/v1/sync/requests", token).catch(() => ({ requests: [] })),
     ]);
     setSessions(s);
     setDevices(d.filter((x) => !x.revoked_at));
     setShares((sh.granted ?? []).filter((x) => (x.permissions ?? 0) & 256));
+    setRequests(req.requests ?? []);
   }, [token]);
 
   useEffect(() => {
@@ -114,6 +119,14 @@ export default function SyncPage() {
     finally { setBusy(false); }
   }
 
+  async function respondToRequest(id: string, accept: boolean) {
+    try {
+      await apiFetch(`/api/v1/sync/${id}/${accept ? "accept" : "decline"}`,
+        token!, { method: "POST" });
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "failed"); }
+  }
+
   async function action(s: SyncSession, act: "pause" | "resume" | "stop") {
     try {
       await apiFetch(`/api/v1/sync/${s.id}/${act}`, token!, { method: "POST" });
@@ -125,6 +138,13 @@ export default function SyncPage() {
     const m = new Map(devices.map((d) => [d.id, d.name]));
     return (id: string) => m.get(id) ?? "other computer";
   }, [devices]);
+
+  const filteredShares = useMemo(() => {
+    const q = colleagueEmail.trim().toLowerCase();
+    if (!q) return shares;
+    return shares.filter((s) =>
+      (s.owner_email ?? "").toLowerCase().includes(q));
+  }, [shares, colleagueEmail]);
 
   return (
     <div>
@@ -139,6 +159,30 @@ export default function SyncPage() {
       />
 
       {error && <div className="card mb-4 px-4 py-3 text-sm text-[var(--color-danger)]">{error}</div>}
+
+      {/* incoming sync requests — the "popup" the other user sees */}
+      {requests.map((r) => (
+        <div key={r.id}
+          className="card mb-4 flex flex-wrap items-center gap-3 border-[var(--color-primary)] bg-[rgba(139,92,246,0.07)] p-4">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(139,92,246,0.18)]">
+            <RefreshCw size={18} className="text-[var(--color-accent)]" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">Sync request</div>
+            <div className="mt-0.5 text-xs text-[var(--color-text-dim)]">
+              A colleague wants to sync <span className="font-medium text-[var(--color-text)]">{basename(r.name.split("↔")[0]?.trim() || r.name)}</span>
+              {" "}with <span className="font-medium text-[var(--color-text)]">{basename(r.my_root ?? "")}</span> on {r.my_device_name}.
+              Accepting starts syncing immediately — their content downloads to your PC.
+            </div>
+          </div>
+          <button className="btn btn-primary" onClick={() => respondToRequest(r.id, true)}>
+            <Check size={14} /> Accept
+          </button>
+          <button className="btn btn-ghost" onClick={() => respondToRequest(r.id, false)}>
+            Decline
+          </button>
+        </div>
+      ))}
 
       {sessions !== null && sessions.length > 0 && (
         <div className="mb-4 flex gap-1 rounded-lg bg-[var(--color-surface-2)] p-1 w-fit">
@@ -173,7 +217,9 @@ export default function SyncPage() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold">{s.name || basename(s.participants[0]?.root ?? "Sync")}</span>
-                    <span className={`badge ${STATE_STYLE[s.state] ?? "badge-gray"}`}>{s.state}</span>
+                    <span className={`badge ${s.state === "pending" ? "badge-amber" : STATE_STYLE[s.state] ?? "badge-gray"}`}>
+                      {s.state === "pending" ? "waiting for acceptance" : s.state}
+                    </span>
                     {s.mode === "review" && <span className="badge badge-blue">review</span>}
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--color-text-dim)]">
@@ -259,22 +305,27 @@ export default function SyncPage() {
                   </select>
                 </>
               ) : (
-                <select className="input w-full" value={bPath} onChange={(e) => setBPath(e.target.value)}>
-                  <option value="">
-                    {shares.length ? "Shared folder with sync permission…" : "No colleague folders with sync access"}
-                  </option>
-                  {shares.map((s) => (
-                    <option key={s.id} value={`share:${s.id}`}>
-                      {s.label || basename(s.root_path)} — {s.device_name}
+                <>
+                  <input className="input mb-2 w-full"
+                    placeholder="Colleague's email"
+                    value={colleagueEmail}
+                    onChange={(e) => setColleagueEmail(e.target.value)} />
+                  <select className="input w-full" value={bPath} onChange={(e) => setBPath(e.target.value)}>
+                    <option value="">
+                      {filteredShares.length ? "Shared folder or file to sync…" : "No colleague folders with sync access"}
                     </option>
-                  ))}
-                </select>
-              )}
-              {bKind === "colleague" && (
-                <p className="mt-2 text-[11px] text-[var(--color-text-dim)]">
-                  Colleague folders appear here when they grant you the “sync”
-                  permission (Manager role) on a shared folder.
-                </p>
+                    {filteredShares.map((s) => (
+                      <option key={s.id} value={`share:${s.id}`}>
+                        {s.label || basename(s.root_path)} — {s.device_name}
+                        {s.owner_email ? ` (${s.owner_email})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+                    They'll get a sync request on their dashboard — once they
+                    accept, the folder downloads and stays in sync.
+                  </p>
+                </>
               )}
             </div>
           </div>

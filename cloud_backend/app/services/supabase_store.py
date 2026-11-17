@@ -347,12 +347,13 @@ class SupabaseDeviceStore:
     async def create_sync(
         self, owner_id: str, a_device_id: str, a_path: str,
         b_device_id: str, b_path: str, mode: str,
+        state: str = "active",
     ) -> dict:
         r = await self._client.post(
             "/sync_sessions",
             json={
                 "name": f"{a_path} ↔ {b_path}",
-                "mode": mode, "state": "active", "created_by": owner_id,
+                "mode": mode, "state": state, "created_by": owner_id,
             },
         )
         r.raise_for_status()
@@ -519,7 +520,7 @@ class SupabaseDeviceStore:
             "/folder_permissions",
             params={
                 "subject_user_id": f"eq.{user_id}",
-                "select": "id,permissions_granted,folder_id,shared_folders(*,devices(name))",
+                "select": "id,permissions_granted,folder_id,shared_folders(*,devices(name),profiles(email))",
             },
         )
         r.raise_for_status()
@@ -532,6 +533,7 @@ class SupabaseDeviceStore:
             out.append({
                 **self._share_row(s),
                 "device_name": (s.get("devices") or {}).get("name", ""),
+                "owner_email": (s.get("profiles") or {}).get("email"),
                 "permissions": g["permissions_granted"],
                 "grant_id": g["id"],
             })

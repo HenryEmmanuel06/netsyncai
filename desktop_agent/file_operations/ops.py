@@ -103,6 +103,13 @@ async def op_browse_folder(ctx: AgentContext, args: dict) -> dict:
             "entries": [],
         }
     target = ctx.check_path(path)
+    if target.is_file():
+        st = target.stat()
+        return {"path": str(target), "entries": [{
+            "name": target.name, "rel_path": str(target), "path": str(target),
+            "size": st.st_size, "mtime": st.st_mtime, "is_dir": False,
+            "ext": target.suffix.lower(),
+        }]}
     if not target.is_dir():
         raise OpDenied("not a directory")
     entries = []

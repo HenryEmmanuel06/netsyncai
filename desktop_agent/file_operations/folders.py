@@ -102,15 +102,17 @@ async def op_list_local_dirs(ctx: AgentContext, args: dict) -> dict:
         children = sorted(target.iterdir(), key=lambda p: p.name.lower())
     except OSError as exc:
         raise OpDenied(f"cannot open folder: {exc.strerror or exc}")
+    include_files = bool(args.get("files"))
     for child in children:
         try:
-            if not child.is_dir() or child.name.startswith(("$", ".")):
+            is_dir = child.is_dir()
+            if (not is_dir and not include_files) or child.name.startswith(("$", ".")):
                 continue
         except OSError:
             continue
         reason = is_blocked(child, ctx.data_dir)
         entries.append({"name": child.name, "path": str(child),
-                        "kind": "dir", "blocked": reason})
+                        "kind": "dir" if is_dir else "file", "blocked": reason})
     parent = None if target.parent == target else str(target.parent)
     return {"path": str(target), "parent": parent,
             "blocked": is_blocked(target, ctx.data_dir), "entries": entries}
@@ -182,8 +184,8 @@ async def op_add_folder(ctx: AgentContext, args: dict) -> dict:
     if access not in ACCESS_LEVELS:
         raise OpDenied("access must be 'read' or 'readwrite'")
     target = Path(raw)
-    if not raw or not target.is_absolute() or not target.is_dir():
-        raise OpDenied("not a directory on this computer")
+    if not raw or not target.is_absolute() or not (target.is_dir() or target.is_file()):
+        raise OpDenied("not a file or folder on this computer")
     target = target.resolve()
     if reason := is_blocked(target, ctx.data_dir):
         raise OpDenied(reason)
