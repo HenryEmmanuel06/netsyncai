@@ -5,8 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity as ActivityIcon, ArrowRight, ArrowLeftRight, Bot, CloudOff,
-  FolderSearch, FolderSync, Monitor, RefreshCw, Search, ServerCrash,
-  Share2, X,
+  FolderSync, Monitor, RefreshCw, Search, ServerCrash, Share2, X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -305,24 +304,6 @@ function DashboardInner() {
             )}
           </div>
         </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        {[
-          { href: "/files", icon: <FolderSearch size={17} />, title: "Find & get files", sub: "Browse every computer", tone: "blue" as const },
-          { href: "/sync", icon: <FolderSync size={17} />, title: "Sync folders", sub: "Keep them identical", tone: "green" as const },
-          { href: "/permissions", icon: <Share2 size={17} />, title: "Share a folder", sub: "Grant people access", tone: "amber" as const },
-          { href: "/assistant", icon: <Bot size={17} />, title: "Ask the AI", sub: "Multi-step automation", tone: "purple" as const },
-        ].map((a) => (
-          <Link key={a.title} href={a.href} className="card card-hover group flex items-center gap-3 p-4">
-            <IconTile tone={a.tone} size={38}>{a.icon}</IconTile>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{a.title}</div>
-              <div className="truncate text-xs text-[var(--color-text-faint)]">{a.sub}</div>
-            </div>
-            <ArrowRight size={14} className="ml-auto text-[var(--color-text-faint)] transition-transform group-hover:translate-x-0.5" />
-          </Link>
-        ))}
       </div>
     </div>
   );

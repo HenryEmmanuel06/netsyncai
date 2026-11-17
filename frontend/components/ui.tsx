@@ -1,7 +1,89 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
-import { X } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Check, ChevronDown, X } from "lucide-react";
+
+export interface DropdownOption {
+  value: string;
+  label: string;
+  hint?: string;
+  icon?: React.ReactNode;
+  group?: string;
+  disabled?: boolean;
+}
+
+/** Styled replacement for <select> — the native popup can't be themed. */
+export function Dropdown({ value, options, onChange, placeholder = "Choose…", className = "", align = "left" }: {
+  value: string; options: DropdownOption[]; onChange: (v: string) => void;
+  placeholder?: string; className?: string; align?: "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const groups: { name?: string; items: DropdownOption[] }[] = [];
+  for (const o of options) {
+    const last = groups[groups.length - 1];
+    if (last && last.name === o.group) last.items.push(o);
+    else groups.push({ name: o.group, items: [o] });
+  }
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open}
+        className={`input flex w-full items-center gap-2 text-left ${open ? "!border-[rgba(139,92,246,0.7)] !shadow-[0_0_0_3px_rgba(139,92,246,0.16)]" : ""}`}>
+        {current?.icon}
+        <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-[var(--color-text-faint)]"}`}>
+          {current?.label ?? placeholder}
+        </span>
+        {current?.hint && <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{current.hint}</span>}
+        <ChevronDown size={14} className={`shrink-0 text-[var(--color-text-dim)] transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div role="listbox"
+          className={`card pop-in absolute top-full z-40 mt-1.5 max-h-72 min-w-full overflow-y-auto p-1.5 !shadow-[0_16px_40px_-8px_rgba(0,0,0,0.7)] ${align === "right" ? "right-0" : "left-0"}`}
+          style={{ width: "max-content", maxWidth: 340 }}>
+          {groups.map((g, gi) => (
+            <div key={gi} className={gi > 0 ? "mt-1 border-t border-[var(--color-border)] pt-1" : ""}>
+              {g.name && <div className="section-label px-2.5 pb-1 pt-1.5">{g.name}</div>}
+              {g.items.map((o) => {
+                const active = o.value === value;
+                return (
+                  <button key={o.value} type="button" role="option" aria-selected={active}
+                    disabled={o.disabled}
+                    onClick={() => { onChange(o.value); setOpen(false); }}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors disabled:opacity-40 ${
+                      active ? "bg-[rgba(139,92,246,0.12)] text-[var(--color-text)]" : "text-[var(--color-text-dim)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                    }`}>
+                    {o.icon}
+                    <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                    {o.hint && <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{o.hint}</span>}
+                    <Check size={13} className={`shrink-0 text-[var(--color-accent)] ${active ? "" : "invisible"}`} />
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          {options.length === 0 && (
+            <div className="px-3 py-4 text-center text-xs text-[var(--color-text-faint)]">Nothing to choose yet</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function PageHeader({ title, subtitle, actions }: {
   title: string; subtitle?: string; actions?: React.ReactNode;

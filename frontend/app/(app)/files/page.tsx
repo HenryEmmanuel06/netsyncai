@@ -11,7 +11,7 @@ import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { useTransfers } from "@/components/TransferCenter";
 import {
-  ConfirmDialog, EmptyState, FileIcon, FolderArt, Modal, PageHeader, Spinner, StatusDot,
+  ConfirmDialog, Dropdown, EmptyState, FileIcon, FolderArt, Modal, PageHeader, Spinner, StatusDot,
 } from "@/components/ui";
 import { basename, formatBytes, formatDate, parentPath } from "@/lib/format";
 import type { Device, RemoteFileEntry, SharedFolder } from "@/types";
@@ -351,13 +351,17 @@ function FilesInner() {
         subtitle={picker ? `${picker.label}${picker.shared ? " · shared with you" : ""}` : "Browse, download and organize files on connected computers."}
         actions={
           <>
-            <select className="input" value={selected} onChange={(e) => select(e.target.value)}>
-              {pickers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}{p.status === "offline" ? " (offline)" : p.shared ? " (shared)" : ""}
-                </option>
-              ))}
-            </select>
+            <Dropdown className="min-w-[220px]" align="right" value={selected} onChange={select}
+              placeholder="Choose a computer…"
+              options={pickers.map((p) => ({
+                value: p.id,
+                label: p.shared ? (p.shared.label || basename(p.shared.root_path)) : p.label,
+                hint: p.shared ? p.shared.device_name : p.status === "online" ? "online" : "offline",
+                group: p.shared ? "Shared with me" : "My computers",
+                icon: p.shared
+                  ? <FolderArt size={16} tone="purple" />
+                  : <span className="flex w-4 justify-center"><StatusDot status={p.status} /></span>,
+              }))} />
             {canWrite && (
               <>
                 <button className="btn btn-ghost" onClick={() => setMkdirOpen(true)}>
@@ -375,46 +379,72 @@ function FilesInner() {
         }
       />
 
-      {/* toolbar: breadcrumbs + search */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        {searchMode ? (
-          <button className="btn btn-ghost !p-2" onClick={() => { setSearchMode(false); browse(picker!.deviceId, path); }}>
-            <ArrowLeft size={15} />
-          </button>
-        ) : (
-          <nav className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
-            {!path && <span className="text-[var(--color-text-dim)]">All shared folders</span>}
-            {breadcrumbs().map((b, i, arr) => (
-              <span key={b.path} className="flex items-center gap-1">
-                {i > 0 && <span className="text-[var(--color-text-dim)]">/</span>}
-                <button
-                  className={i === arr.length - 1 ? "font-medium" : "text-[var(--color-text-dim)] hover:text-[var(--color-accent)]"}
-                  onClick={() => picker && browse(picker.deviceId, b.path)}>
-                  {b.label}
-                </button>
+      {/* toolbar: path bar + search + view toggle */}
+      <div className="card mb-4 flex flex-wrap items-center gap-2 p-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-1">
+          {searchMode ? (
+            <button className="icon-btn" title="Back to folder"
+              onClick={() => { setSearchMode(false); setSearchQ(""); browse(picker!.deviceId, path); }}>
+              <ArrowLeft size={14} />
+            </button>
+          ) : (
+            <button className="icon-btn" title="Up one level"
+              disabled={!path || !parentPath(path)}
+              onClick={() => picker && path && parentPath(path) && browse(picker.deviceId, parentPath(path)!)}>
+              <ArrowLeft size={14} />
+            </button>
+          )}
+          <nav className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto whitespace-nowrap text-[13px]">
+            <HardDrive size={14} className="mx-1.5 shrink-0 text-[var(--color-text-faint)]" />
+            {searchMode ? (
+              <span className="text-[var(--color-text-dim)]">
+                Results for <span className="font-medium text-[var(--color-text)]">“{searchQ}”</span>
+                <span className="pill ml-2">{entries.length}</span>
               </span>
-            ))}
-            {path && parentPath(path) && (
-              <button className="btn btn-ghost ml-2 !p-1.5" title="Up"
-                onClick={() => picker && browse(picker.deviceId, parentPath(path)!)}>
-                <ArrowLeft size={13} />
-              </button>
+            ) : !path ? (
+              <span className="text-[var(--color-text-dim)]">All shared folders</span>
+            ) : (
+              breadcrumbs().map((b, i, arr) => (
+                <span key={b.path} className="flex items-center gap-0.5">
+                  {i > 0 && <ChevronRight size={13} className="shrink-0 text-[var(--color-text-faint)]" />}
+                  <button
+                    className={`rounded-md px-1.5 py-1 transition-colors ${
+                      i === arr.length - 1
+                        ? "font-medium text-[var(--color-text)]"
+                        : "text-[var(--color-text-dim)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                    }`}
+                    onClick={() => picker && browse(picker.deviceId, b.path)}>
+                    {b.label}
+                  </button>
+                </span>
+              ))
             )}
           </nav>
-        )}
-        <form className="input flex min-w-[240px] flex-1 items-center gap-2 !py-1.5"
+        </div>
+
+        <form className="input flex w-full items-center gap-2 !py-[7px] sm:w-72"
           onSubmit={(e) => { e.preventDefault(); if (searchQ.trim() && picker) { setSearchMode(true); search(picker.deviceId, searchQ); } }}>
-          <Search size={14} className="text-[var(--color-text-dim)]" />
-          <input className="w-full bg-transparent text-sm outline-none"
-            placeholder={`Search on ${picker?.label ?? "device"}…`}
+          <Search size={14} className="shrink-0 text-[var(--color-text-faint)]" />
+          <input className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+            placeholder={`Search ${picker?.label ?? "files"}…`}
             value={searchQ} onChange={(e) => setSearchQ(e.target.value)} />
+          {searchQ ? (
+            <button type="button" className="shrink-0 rounded p-0.5 text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
+              title="Clear" onClick={() => {
+                setSearchQ("");
+                if (searchMode && picker) { setSearchMode(false); browse(picker.deviceId, path); }
+              }}>
+              <X size={13} />
+            </button>
+          ) : <kbd>Enter</kbd>}
         </form>
-        <div className="flex gap-0.5 rounded-lg bg-[var(--color-surface-2)] p-0.5">
-          <button className={`rounded-md p-1.5 ${viewMode === "grid" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-text-dim)]"}`}
+
+        <div className="segmented !p-0.5">
+          <button className={`tab !px-2 !py-1.5 ${viewMode === "grid" ? "tab-active" : ""}`}
             title="Grid view" onClick={() => setViewMode("grid")}>
             <LayoutGrid size={14} />
           </button>
-          <button className={`rounded-md p-1.5 ${viewMode === "list" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-text-dim)]"}`}
+          <button className={`tab !px-2 !py-1.5 ${viewMode === "list" ? "tab-active" : ""}`}
             title="List view" onClick={() => setViewMode("list")}>
             <List size={14} />
           </button>
@@ -434,7 +464,7 @@ function FilesInner() {
 
       {/* two-pane: device tree + entries */}
       <div className="grid gap-4 lg:grid-cols-[230px_1fr]">
-        <div className="card hidden self-start p-2 lg:block">
+        <div className="card hidden max-h-[calc(100vh-15.5rem)] self-start overflow-y-auto p-2 lg:block">
           {pickers.filter((p) => !p.shared).map((p) => (
             <div key={p.id}>
               <button
@@ -509,7 +539,7 @@ function FilesInner() {
           )}
         </div>
 
-        <div className="card overflow-hidden">
+        <div className="card max-h-[calc(100vh-15.5rem)] min-h-[260px] overflow-y-auto">
         {loading ? (
           <div className="p-10 text-center"><Spinner /></div>
         ) : entries.length === 0 ? (
@@ -551,8 +581,8 @@ function FilesInner() {
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-[var(--color-surface-2)] text-left text-xs text-[var(--color-text-dim)]">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-[var(--color-surface-2)] text-left text-xs text-[var(--color-text-dim)] shadow-[0_1px_0_var(--color-border)]">
                 <th className="px-4 py-2.5 font-medium">Name</th>
                 <th className="hidden px-4 py-2.5 font-medium md:table-cell">Tags</th>
                 <th className="px-4 py-2.5 font-medium">Size</th>
