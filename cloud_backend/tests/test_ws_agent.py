@@ -52,6 +52,16 @@ def _read_envelope(ws):
     return Envelope.model_validate_json(ws.receive_text())
 
 
+def _answer_dispatch(ws, env, result):
+    """Reply to a command.dispatch like the real agent does."""
+    ws.send_text(Envelope(
+        type=MessageType.COMMAND_RESULT,
+        payload={"task_id": env.payload.get("task_id"),
+                 "step_id": env.payload.get("step_id"),
+                 "ok": True, "result": result},
+    ).model_dump_json())
+
+
 def test_hello_auth_connects_and_sets_online(client, auth_headers):
     dev = _pair_device(client, auth_headers)
     with client.websocket_connect("/ws/agent") as ws:
@@ -112,7 +122,13 @@ def test_ping_pong_heartbeat(client, auth_headers):
         ws.send_text(_hello(dev["device_id"], dev["device_credential"]))
         _read_envelope(ws)
         ws.send_text(Envelope(type=MessageType.PING).model_dump_json())
-        assert _read_envelope(ws).type is MessageType.PONG
+        # the share-reconcile list_folders dispatch may land before the pong
+        while True:
+            env = _read_envelope(ws)
+            if env.type is MessageType.PONG:
+                break
+            if env.type is MessageType.COMMAND_DISPATCH:
+                _answer_dispatch(ws, env, {"folders": []})
 
 
 def test_presence_update_changes_status(client, auth_headers):

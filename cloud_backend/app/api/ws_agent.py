@@ -42,6 +42,38 @@ def _env(msg_type: MessageType, payload: dict) -> str:
     return Envelope(type=msg_type, payload=payload).model_dump_json()
 
 
+async def _reconcile_shares(store: DeviceStore, device: DeviceResponse) -> None:
+    """On connect: drop cloud shares whose roots the agent no longer has.
+
+    Covers folders removed while the device was offline (or by older app
+    versions) — the cloud must not ghost-share what the agent won't serve.
+    Runs as a task: dispatch results resolve inside the socket read loop.
+    """
+    try:
+        res = await dispatcher.dispatch(
+            device.id, "list_folders", {}, timeout=15)
+    except Exception as exc:
+        log.debug("share reconcile skipped for %s: %s", device.id, exc)
+        return
+    live = {
+        f.get("path", "").replace("/", "\\").lower().rstrip("\\")
+        for f in res.get("folders", [])
+    }
+    for s in await store.list_shares_owned(device.owner_id):
+        if s["device_id"] != device.id:
+            continue
+        if s["root_path"].replace("/", "\\").lower().rstrip("\\") in live:
+            continue
+        try:
+            n = await store.delete_shares_for_root(
+                device.owner_id, device.id, s["root_path"])
+            if n:
+                log.info("reconciled %d ghost share(s) at %s on %s",
+                         n, s["root_path"], device.id)
+        except Exception:
+            log.warning("could not reconcile share %s", s.get("id"))
+
+
 async def _close(ws: WebSocket, code: int, error_code: str, message: str) -> None:
     try:
         await ws.send_text(_env(
@@ -88,6 +120,9 @@ async def agent_socket(
         log.info("device %s connected (%s)", device.id, device.name)
         await log_activity(store, device.owner_id, "device.online",
                            device_id=device.id, target=device.name)
+
+        # prune share records for roots the agent no longer shares
+        asyncio.create_task(_reconcile_shares(store, device))
 
         # re-issue active sync sessions — agents drop watchers on disconnect
         for s in await store.get_active_syncs_for_device(device.id):
