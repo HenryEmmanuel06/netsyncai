@@ -28,6 +28,7 @@ from app.schemas.sharing import (
     SharesResponse,
     ShareCreateRequest,
 )
+from app.services.reconcile import prune_ghost_shares
 from app.security.jwt import AuthContext
 from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore, GrantError
@@ -111,8 +112,10 @@ async def list_shares(
     store: DeviceStore = Depends(get_device_store),
 ):
     return SharesResponse(
-        owned=await store.list_shares_owned(auth.user_id),
-        granted=await store.list_shares_granted(auth.user_id),
+        owned=await prune_ghost_shares(
+            store, await store.list_shares_owned(auth.user_id)),
+        granted=await prune_ghost_shares(
+            store, await store.list_shares_granted(auth.user_id)),
     )
 
 

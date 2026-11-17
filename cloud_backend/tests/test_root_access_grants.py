@@ -114,3 +114,47 @@ async def test_removing_root_revokes_share_for_colleagues(
     owned = (await client.get("/api/v1/sharing",
                               headers=auth_headers)).json()["owned"]
     assert owned == []
+
+
+async def test_ghost_share_pruned_when_device_reachable(
+    client, auth_headers, other_auth_headers, monkeypatch
+):
+    """A share whose root the agent no longer reports disappears from the
+    colleague's list — self-heals shares removed outside this API."""
+    device_id, folder_id = await _setup_share(client, auth_headers)
+    await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                      headers=auth_headers,
+                      json={"subject": OTHER_USER, "permissions": 3})
+
+    async def fake_dispatch(device_id, tool, args, timeout=None):
+        assert tool == "list_folders"
+        return {"folders": []}  # agent no longer shares ROOT
+
+    monkeypatch.setattr("app.services.reconcile.dispatch", fake_dispatch)
+
+    granted = (await client.get("/api/v1/sharing",
+                                headers=other_auth_headers)).json()["granted"]
+    assert granted == []
+    # the record is deleted, not just hidden
+    owned = (await client.get("/api/v1/sharing",
+                              headers=auth_headers)).json()["owned"]
+    assert owned == []
+
+
+async def test_ghost_share_kept_when_device_offline(
+    client, auth_headers, other_auth_headers, monkeypatch
+):
+    """Can't verify while the device is unreachable — don't prune."""
+    _, folder_id = await _setup_share(client, auth_headers)
+    await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                      headers=auth_headers,
+                      json={"subject": OTHER_USER, "permissions": 3})
+
+    async def offline(device_id, tool, args, timeout=None):
+        raise DeviceOffline(device_id)
+
+    monkeypatch.setattr("app.services.reconcile.dispatch", offline)
+
+    granted = (await client.get("/api/v1/sharing",
+                                headers=other_auth_headers)).json()["granted"]
+    assert len(granted) == 1

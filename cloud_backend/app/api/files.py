@@ -44,6 +44,7 @@ from app.schemas.files import (
 from app.security.jwt import AuthContext
 from app.services.activity import log_activity
 from app.services.device_registry import DeviceNotFound, DeviceStore
+from app.services.reconcile import prune_ghost_shares
 
 log = logging.getLogger("netsync.files")
 router = APIRouter(prefix="/devices/{device_id}", tags=["files"])
@@ -122,8 +123,12 @@ async def browse(
         if is_owner:
             result = await dispatch(device_id, "browse_folder", {"path": ""})
         else:
-            roots = await store.granted_roots(auth.user_id, device_id)
-            roots = [r for r in roots if r["permissions"] & PERM_BROWSE]
+            shares = [
+                s for s in await prune_ghost_shares(
+                    store, await store.list_shares_granted(auth.user_id))
+                if s["device_id"] == device_id
+            ]
+            roots = [s for s in shares if s["permissions"] & PERM_BROWSE]
             if not roots:
                 raise http_404("device not found")
             return BrowseResponse(path="", entries=[], roots=[
