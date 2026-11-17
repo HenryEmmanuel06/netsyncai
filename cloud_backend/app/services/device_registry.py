@@ -99,6 +99,13 @@ class DeviceStore(Protocol):
     async def revoke_grant(self, folder_id: str, grant_id: str, owner_id: str) -> None: ...
     async def list_grants(self, folder_id: str) -> list[dict]: ...
     async def delete_share(self, owner_id: str, folder_id: str) -> None: ...
+    async def delete_shares_for_root(
+        self, owner_id: str, device_id: str, root_path: str
+    ) -> int:
+        """Delete every share record on device+path (grants go with them) —
+        called when the owner removes the folder on the agent. Returns the
+        number of shares removed."""
+        ...
     async def effective_permissions(
         self, user_id: str, device_id: str, path: str
     ) -> int:
@@ -515,6 +522,22 @@ class InMemoryDeviceStore:
         del self._shares[folder_id]
         for gid in [g["id"] for g in self._grants.values() if g["folder_id"] == folder_id]:
             del self._grants[gid]
+
+    async def delete_shares_for_root(
+        self, owner_id: str, device_id: str, root_path: str
+    ) -> int:
+        norm = root_path.replace("/", "\\").lower().rstrip("\\")
+        doomed = [
+            s["id"] for s in getattr(self, "_shares", {}).values()
+            if s["owner_id"] == owner_id and s["device_id"] == device_id
+            and s["root_path"].replace("/", "\\").lower().rstrip("\\") == norm
+        ]
+        for folder_id in doomed:
+            await self.delete_share(owner_id, folder_id)
+            for rid in [r["id"] for r in getattr(self, "_access_requests", {}).values()
+                        if r["folder_id"] == folder_id]:
+                del self._access_requests[rid]
+        return len(doomed)
 
     async def effective_permissions(
         self, user_id: str, device_id: str, path: str

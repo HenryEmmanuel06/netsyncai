@@ -614,6 +614,27 @@ class SupabaseDeviceStore:
         )
         r.raise_for_status()
 
+    async def delete_shares_for_root(
+        self, owner_id: str, device_id: str, root_path: str
+    ) -> int:
+        norm = root_path.replace("/", "\\").lower().rstrip("\\")
+        r = await self._client.get(
+            "/shared_folders",
+            params={"owner_id": f"eq.{owner_id}", "device_id": f"eq.{device_id}",
+                    "select": "id,path_hint"},
+        )
+        r.raise_for_status()
+        doomed = [
+            s["id"] for s in r.json()
+            if (s.get("path_hint") or "").replace("/", "\\").lower().rstrip("\\") == norm
+        ]
+        for folder_id in doomed:
+            # folder_permissions + access_requests cascade on delete
+            await self._client.delete(
+                "/shared_folders", params={"id": f"eq.{folder_id}"},
+            )
+        return len(doomed)
+
     async def effective_permissions(
         self, user_id: str, device_id: str, path: str
     ) -> int:

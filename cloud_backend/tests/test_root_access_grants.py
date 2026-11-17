@@ -83,3 +83,34 @@ async def test_approve_request_enforced(client, auth_headers,
     r = await client.post(f"/api/v1/sharing/requests/{req_id}/approve",
                           headers=auth_headers, json={"role": "viewer"})
     assert r.status_code == 200
+
+
+async def test_removing_root_revokes_share_for_colleagues(
+    client, auth_headers, other_auth_headers, monkeypatch
+):
+    """Stop-sharing on the device deletes the share record + grants, so the
+    folder disappears from the colleague's Shared-with-me list."""
+    device_id, folder_id = await _setup_share(client, auth_headers)
+    await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                      headers=auth_headers,
+                      json={"subject": OTHER_USER, "permissions": 3})
+    granted = (await client.get("/api/v1/sharing",
+                                headers=other_auth_headers)).json()["granted"]
+    assert len(granted) == 1
+
+    async def fake_dispatch(device_id, tool, args, timeout=None):
+        assert tool == "remove_folder"
+        return {"removed": args["path"]}
+
+    monkeypatch.setattr("app.api.folders.dispatch", fake_dispatch)
+    r = await client.post(f"/api/v1/devices/{device_id}/folders/remove",
+                          headers=auth_headers, json={"path": ROOT})
+    assert r.status_code == 200
+
+    # colleague no longer sees it; owner has no share record either
+    granted = (await client.get("/api/v1/sharing",
+                                headers=other_auth_headers)).json()["granted"]
+    assert granted == []
+    owned = (await client.get("/api/v1/sharing",
+                              headers=auth_headers)).json()["owned"]
+    assert owned == []

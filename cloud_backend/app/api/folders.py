@@ -133,8 +133,12 @@ async def remove_folder(
 ):
     await _owner(device_id, auth, store)
     result = await dispatch(device_id, "remove_folder", req.model_dump())
+    # removing the root on the agent revokes sharing — drop share records
+    # (and their grants/requests) so collaborators stop seeing the folder
+    removed = await store.delete_shares_for_root(auth.user_id, device_id, req.path)
     await log_activity(store, auth.user_id, "folder.removed",
-                       device_id=device_id, target=req.path)
+                       device_id=device_id, target=req.path,
+                       metadata={"shares_removed": removed})
     return result
 
 
