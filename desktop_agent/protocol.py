@@ -134,6 +134,7 @@ class SyncOpType(str, Enum):
     DELETE = "delete"
     RENAME = "rename"
     DIR = "dir"             # ensure a directory exists on the peer
+    RMDIR = "rmdir"         # drop a directory only if it is empty
 
 
 class SyncEvent(BaseModel):

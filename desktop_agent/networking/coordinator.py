@@ -133,6 +133,15 @@ async def _handle_message(raw: str, send, ctx=None, tasks=None) -> None:
     elif env.type in TRANSFER_TYPES:
         if ctx is not None:
             state = ctx.transfer_state(env.payload["transfer_id"])
+            if env.type is MessageType.TRANSFER_BEGIN:
+                p = env.payload
+                state.name = state.name or p.get("name", "")
+                state.size = p.get("size", 0) or state.size
+                state.meta = p.get("meta") or {}
+                state.direction = "in"
+            elif env.type is MessageType.TRANSFER_CHUNK:
+                # base64 inflates by 4/3 — close enough for a progress bar
+                state.received += (len(env.payload["data"]) * 3) // 4
             await state.queue.put(env)
     elif env.type is MessageType.SYNC_EVENT:
         if ctx is not None:

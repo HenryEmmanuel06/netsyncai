@@ -156,6 +156,16 @@ async def test_two_agent_bidirectional_sync(backend, tmp_path):
                 lambda: (root_a / "made-on-B" / "inner.txt").is_file()
             ), "file inside synced folder did not arrive"
 
+            # the Explorer pattern — create "New folder" then rename — must
+            # not leave a ghost of the temporary name on the peer
+            (root_a / "New folder").mkdir()
+            assert await _wait_for(lambda: (root_b / "New folder").is_dir())
+            (root_a / "New folder").rename(root_a / "Real name")
+            assert await _wait_for(lambda: (root_b / "Real name").is_dir())
+            assert await _wait_for(
+                lambda: not (root_b / "New folder").exists()
+            ), "renamed empty folder left a ghost on the peer"
+
             # deletes do NOT propagate: B removing its copy must not delete
             # A's original — the file simply falls out of sync tracking.
             (root_b / "newfile.md").unlink()

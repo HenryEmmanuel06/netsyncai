@@ -243,7 +243,8 @@ async def sync_live(
     sides = []
     for p in session["participants"]:
         side = {"device_id": p["device_id"], "root": p["root"], "online": False,
-                "applied_ops": 0, "emitted_ops": 0, "pending_ops": 0, "paused": False}
+                "applied_ops": 0, "emitted_ops": 0, "pending_ops": 0,
+                "paused": False, "transfers": []}
         try:
             res = await dispatch(p["device_id"], "get_device_status", {}, timeout=10)
             sess = (res.get("sync_sessions") or {}).get(session_id)
@@ -251,6 +252,7 @@ async def sync_live(
                 side.update({k: sess.get(k, side[k]) for k in
                              ("applied_ops", "emitted_ops", "pending_ops", "paused")})
                 side["online"] = True
+            side["transfers"] = res.get("transfers", [])
         except Exception:
             pass
         sides.append(side)

@@ -47,6 +47,13 @@ class IncomingTransfer:
     transfer_id: str
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     dest: Path | None = None
+    # progress metadata for the dashboard Transfers page
+    name: str = ""
+    size: int = 0
+    received: int = 0
+    rel_path: str = ""
+    direction: str = "in"          # in = arriving on this PC, out = sending
+    meta: dict = field(default_factory=dict)
 
 
 class AgentContext:
@@ -56,6 +63,7 @@ class AgentContext:
         self.conn = conn
         self.send = send
         self.incoming: dict[str, IncomingTransfer] = {}
+        self.recent_transfers: list[dict] = []   # finished rows for the UI
         self.indexing: set[int] = set()          # folder ids being indexed
         self.background: set[asyncio.Task] = set()
         db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
@@ -87,6 +95,19 @@ class AgentContext:
         return self.incoming.setdefault(
             transfer_id, IncomingTransfer(transfer_id)
         )
+
+    def note_transfer(self, st: IncomingTransfer, ok: bool) -> None:
+        """Move a finished transfer to the recent list the dashboard polls."""
+        self.recent_transfers.append({
+            "id": st.transfer_id, "name": st.name, "size": st.size,
+            "received": st.received, "direction": st.direction,
+            "rel_path": st.rel_path,
+            "dest": str(st.dest) if st.dest else "",
+            "session_id": (st.meta or {}).get("session_id", ""),
+            "done": True, "ok": ok,
+        })
+        del self.recent_transfers[:-25]
+        self.incoming.pop(st.transfer_id, None)
 
 
 # ── read ops ─────────────────────────────────────────────────────────────────
@@ -285,6 +306,8 @@ async def op_send_file(ctx: AgentContext, args: dict) -> dict:
     transfer_id = args["transfer_id"]
     state = ctx.transfer_state(transfer_id)
     state.dest = dest
+    state.name = args.get("name", "")
+    state.direction = "in"
 
     tmp_dir = dest.parent / PARTIAL_DIR
     tmp_dir.mkdir(exist_ok=True)
@@ -307,10 +330,12 @@ async def op_send_file(ctx: AgentContext, args: dict) -> dict:
                     raise OpDenied("transfer aborted by sender")
     except Exception:
         tmp.unlink(missing_ok=True)
+        ctx.note_transfer(state, ok=False)
         raise
 
     if h.hexdigest() != received_end["sha256"]:
         tmp.unlink(missing_ok=True)
+        ctx.note_transfer(state, ok=False)
         raise OpDenied("sha256 mismatch — transfer corrupted")
 
     # collision handling: don't silently overwrite
@@ -320,7 +345,7 @@ async def op_send_file(ctx: AgentContext, args: dict) -> dict:
         final = dest.with_name(f"{dest.stem} ({n}){dest.suffix}")
         n += 1
     os.replace(tmp, final)
-    ctx.incoming.pop(transfer_id, None)
+    ctx.note_transfer(state, ok=True)
     return {"written": str(final), "size": final.stat().st_size, "sha256": h.hexdigest()}
 
 

@@ -62,7 +62,7 @@ class _Watcher(FileSystemEventHandler):
             self._loop.call_soon_threadsafe(
                 self._queue.put_nowait,
                 (event.event_type, event.src_path,
-                 getattr(event, "dest_path", None)),
+                 getattr(event, "dest_path", None), event.is_directory),
             )
         except RuntimeError:
             pass  # loop closed during shutdown
@@ -178,21 +178,34 @@ class SyncEngine:
         if rt.paused:
             return
         seen: dict[str, tuple] = {}  # rel_path -> (op, path, dest)
-        for ev_type, src, dest in batch:
+        for ev_type, src, dest, is_dir in batch:
             rel = self._rel(rt, Path(dest or src))
             if rel is None or self._ignored(rel) or self._suppressed(rt, rel):
                 continue
             p = Path(dest or src)
             if ev_type == "moved" and dest:
-                # a move = delete old + write new on the peer
+                # a move = drop the old name + recreate under the new one;
+                # rmdir only removes empty dirs, so nothing is ever lost
                 old_rel = self._rel(rt, Path(src))
                 if old_rel and not self._ignored(old_rel):
-                    seen[old_rel] = ("delete", Path(src), None)
-                seen[rel] = ("dir" if p.is_dir() else "modify", p, None)
+                    seen[old_rel] = ("rmdir" if is_dir else "delete", Path(src), None)
+                seen[rel] = ("dir" if is_dir else "modify", p, None)
+                if is_dir:
+                    for dp, dns, fns in os.walk(p):
+                        dns[:] = [d for d in dns if d not in DEFAULT_IGNORES]
+                        for dd in dns:
+                            r2 = self._rel(rt, Path(dp) / dd)
+                            if r2:
+                                seen.setdefault(r2, ("dir", Path(dp) / dd, None))
+                        for fn in fns:
+                            fp = Path(dp) / fn
+                            r2 = self._rel(rt, fp)
+                            if r2:
+                                seen.setdefault(r2, ("modify", fp, None))
             elif p.is_dir():
                 seen[rel] = ("dir", p, None)
             elif ev_type == "deleted":
-                seen[rel] = ("delete", p, None)
+                seen[rel] = ("rmdir" if is_dir else "delete", p, None)
             else:
                 seen[rel] = ("modify", p, None)
 
@@ -213,6 +226,10 @@ class SyncEngine:
         if op == "dir":
             return SyncEvent(session_id=rt.session_id, op_id=op_id,
                              op=SyncOpType.DIR, rel_path=rel,
+                             from_device=self.device_id)
+        if op == "rmdir":
+            return SyncEvent(session_id=rt.session_id, op_id=op_id,
+                             op=SyncOpType.RMDIR, rel_path=rel,
                              from_device=self.device_id)
         try:
             st = path.stat()
@@ -292,6 +309,8 @@ class SyncEngine:
             await self._apply_snapshot(rt, ev)
         elif ev.op is SyncOpType.DIR:
             await self._apply_dir(rt, ev)
+        elif ev.op is SyncOpType.RMDIR:
+            await self._apply_rmdir(rt, ev)
         elif ev.op is SyncOpType.DELETE:
             await self._apply_delete(rt, ev)
         elif ev.op is SyncOpType.RENAME:
@@ -312,11 +331,20 @@ class SyncEngine:
             return
         if not path.is_file():
             return
-        await self._push_file(rt, path, req.transfer_id, req.to_device)
+        await self._push_file(rt, path, req.transfer_id, req.to_device,
+                              rel_path=req.rel_path)
 
-    async def _push_file(self, rt, path: Path, transfer_id: str, dest: str) -> None:
+    async def _push_file(self, rt, path: Path, transfer_id: str, dest: str,
+                         rel_path: str = "") -> None:
         digest = sha256_file(path)
         size = path.stat().st_size
+        state = self.ctx.transfer_state(transfer_id)
+        state.direction = "out"
+        state.name = path.name
+        state.size = size
+        state.dest = path
+        state.rel_path = rel_path
+        state.meta = {"session_id": rt.session_id}
         await self.ctx.send(Envelope(
             type=MessageType.TRANSFER_BEGIN,
             payload=TransferBegin(
@@ -326,20 +354,26 @@ class SyncEngine:
             ).model_dump(),
         ).model_dump_json())
         seq = 0
-        with path.open("rb") as f:
-            while chunk := f.read(CHUNK):
-                await self.ctx.send(Envelope(
-                    type=MessageType.TRANSFER_CHUNK,
-                    payload=TransferChunk(
-                        transfer_id=transfer_id, seq=seq,
-                        data=base64.b64encode(chunk).decode(),
-                    ).model_dump(),
-                ).model_dump_json())
-                seq += 1
-        await self.ctx.send(Envelope(
-            type=MessageType.TRANSFER_END,
-            payload=TransferEnd(transfer_id=transfer_id, seq=seq, sha256=digest).model_dump(),
-        ).model_dump_json())
+        try:
+            with path.open("rb") as f:
+                while chunk := f.read(CHUNK):
+                    await self.ctx.send(Envelope(
+                        type=MessageType.TRANSFER_CHUNK,
+                        payload=TransferChunk(
+                            transfer_id=transfer_id, seq=seq,
+                            data=base64.b64encode(chunk).decode(),
+                        ).model_dump(),
+                    ).model_dump_json())
+                    state.received += len(chunk)
+                    seq += 1
+            await self.ctx.send(Envelope(
+                type=MessageType.TRANSFER_END,
+                payload=TransferEnd(transfer_id=transfer_id, seq=seq, sha256=digest).model_dump(),
+            ).model_dump_json())
+        except Exception:
+            self.ctx.note_transfer(state, ok=False)
+            raise
+        self.ctx.note_transfer(state, ok=True)
 
     async def _apply_dir(self, rt: SyncRuntime, ev: SyncEvent) -> None:
         """Peer created a folder — make it here (empty folders sync too)."""
@@ -353,6 +387,23 @@ class SyncEngine:
             return
         self._mark_suppressed(rt, rel)
         target.mkdir(parents=True, exist_ok=True)
+
+    async def _apply_rmdir(self, rt: SyncRuntime, ev: SyncEvent) -> None:
+        """Peer removed or renamed a folder — drop it only if EMPTY, so
+        rename ghosts disappear without ever deleting real content."""
+        rel = ev.rel_path
+        if self._ignored(rel):
+            return
+        target = (rt.root / rel).resolve()
+        try:
+            target.relative_to(rt.root.resolve())
+        except ValueError:
+            return
+        self._mark_suppressed(rt, rel)
+        try:
+            target.rmdir()  # OSError if missing or non-empty — both fine
+        except OSError:
+            pass
 
     async def _apply_snapshot(self, rt: SyncRuntime, ev: SyncEvent) -> None:
         """Request whatever we're missing or differ on."""
@@ -409,7 +460,7 @@ class SyncEngine:
         base = base_sha if base_sha is not None else self._base_sha(rt, rel)
         conflict = bool(local_sha and base and local_sha != base)
 
-        content = await self._fetch(rt, ev)
+        content = await self._fetch(rt, ev, target)
         if content is None:
             return
 
@@ -432,9 +483,17 @@ class SyncEngine:
         if not conflict:
             self._record_state(rt, rel, ev.sha256 or "", ev.mtime)
 
-    async def _fetch(self, rt: SyncRuntime, ev: SyncEvent) -> bytes | None:
+    async def _fetch(
+        self, rt: SyncRuntime, ev: SyncEvent, dest_hint: Path | None = None
+    ) -> bytes | None:
         transfer_id = str(uuid.uuid4())
         state = self.ctx.transfer_state(transfer_id)
+        state.name = Path(ev.rel_path).name
+        state.rel_path = ev.rel_path
+        state.size = ev.size or 0
+        state.direction = "in"
+        if dest_hint is not None:
+            state.dest = dest_hint
         await self.ctx.send(Envelope(
             type=MessageType.SYNC_REQUEST,
             payload=SyncRequest(
@@ -452,12 +511,16 @@ class SyncEngine:
                 elif env.type is MessageType.TRANSFER_END:
                     break
                 elif env.type is MessageType.TRANSFER_ABORT:
+                    self.ctx.note_transfer(state, ok=False)
                     return None
-        finally:
-            self.ctx.incoming.pop(transfer_id, None)
+        except asyncio.TimeoutError:
+            self.ctx.note_transfer(state, ok=False)
+            return None
         if hashlib.sha256(bytes(buf)).hexdigest() != env.payload["sha256"]:
+            self.ctx.note_transfer(state, ok=False)
             log.warning("sync transfer hash mismatch on %s", ev.rel_path)
             return None
+        self.ctx.note_transfer(state, ok=True)
         return bytes(buf)
 
     # ── helpers ──────────────────────────────────────────────────────────
@@ -549,6 +612,17 @@ async def op_stop_sync(ctx: "AgentContext", args: dict) -> dict:
 
 async def op_get_device_status(ctx: "AgentContext", args: dict) -> dict:
     return {
+        "transfers": [
+            {
+                "id": s.transfer_id, "name": s.name, "size": s.size,
+                "received": s.received, "direction": s.direction,
+                "rel_path": s.rel_path,
+                "dest": str(s.dest) if s.dest else "",
+                "session_id": (s.meta or {}).get("session_id", ""),
+                "done": False, "ok": True,
+            }
+            for s in ctx.incoming.values()
+        ] + ctx.recent_transfers[-10:],
         "sync_sessions": {
             sid: {
                 "root": str(rt.root), "paused": rt.paused, "mode": rt.mode,
