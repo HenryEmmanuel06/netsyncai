@@ -31,8 +31,14 @@ html, body {
 
 /* ── surfaces ─────────────────────────────────────────────────────────── */
 
+/* Position lives in the components layer so positioning utilities
+   (absolute/fixed/sticky) still win when combined with .card — e.g. the
+   pop-up menus that use `card absolute …` must overlay, not go in-flow. */
+@layer components {
+  .card { position: relative; }
+}
+
 .card {
-  position: relative;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 60%),
     var(--color-surface);

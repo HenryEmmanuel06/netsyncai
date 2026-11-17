@@ -326,9 +326,10 @@ function FilesInner() {
     setTags((t) => ({ ...t, [p]: (t[p] ?? []).filter((x) => x !== tag) }));
   }
 
-  function entryMenu(e: RemoteFileEntry, p: string, dir: boolean) {
+  function entryMenu(e: RemoteFileEntry, p: string, dir: boolean, up = false) {
     return (
-      <div className="card absolute right-0 top-full z-20 mt-1 w-40 p-1.5">
+      <div className={`card absolute right-0 z-20 w-40 p-1.5 !bg-[var(--color-surface-3)] !shadow-[0_16px_40px_-8px_rgba(0,0,0,0.75)] ${
+        up ? "bottom-full mb-1" : "top-full mt-1"}`}>
         {!dir && (
           <button className="menu-item" onClick={() => { download(e); setMenu(null); }}>
             <Download size={13} /> Download
@@ -598,7 +599,7 @@ function FilesInner() {
           </div>
         ) : viewMode === "grid" ? (
           <div className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-3 xl:grid-cols-4">
-            {entries.map((e) => {
+            {entries.map((e, i) => {
               const p = e.path ?? e.rel_path;
               const dir = !!e.is_dir;
               return (
@@ -607,7 +608,7 @@ function FilesInner() {
                   <div className="absolute right-1.5 top-1.5 z-10">
                     <button className="icon-btn !h-7 !w-7 opacity-0 transition-opacity group-hover:opacity-100"
                       onClick={() => setMenu(menu === p ? null : p)}>···</button>
-                    {menu === p && entryMenu(e, p, dir)}
+                    {menu === p && entryMenu(e, p, dir, i >= entries.length - 4)}
                   </div>
                   <button className="flex w-full flex-col items-center px-3 pb-3.5 pt-5"
                     onClick={() => dir ? open(e) : download(e)}>
@@ -640,7 +641,7 @@ function FilesInner() {
               </tr>
             </thead>
             <tbody>
-              {entries.map((e) => {
+              {entries.map((e, i) => {
                 const p = e.path ?? e.rel_path;
                 const t = tags[p] ?? [];
                 const dir = !!e.is_dir;
@@ -677,7 +678,7 @@ function FilesInner() {
                       <div className="relative flex justify-end">
                         <button className="btn btn-ghost !p-1.5 opacity-0 transition-opacity group-hover:opacity-100"
                           onClick={() => setMenu(menu === p ? null : p)}>···</button>
-                        {menu === p && entryMenu(e, p, dir)}
+                        {menu === p && entryMenu(e, p, dir, i >= entries.length - 3)}
                       </div>
                     </td>
                   </tr>

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowUp, Ban, Check, Eye, FileText, Folder, FolderPlus, Inbox, Lock, Pencil,
-  RefreshCw, Search, ShieldCheck, UserPlus, X,
+  Ban, Check, Eye, FileText, Folder, FolderPlus, Inbox, Lock, Pencil,
+  Search, ShieldCheck, UserPlus, X,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -56,83 +56,7 @@ const ROLES = [
     desc: "Full access incl. folder sync" },
 ] as const;
 
-interface BrowseEntry { name: string; path: string; kind: "dir" | "file" | "quick" | "drive"; blocked?: string | null }
-
-function PathBrowser({ deviceId, token, selected, onPick }: {
-  deviceId: string; token: string;
-  selected: string; onPick: (p: string) => void;
-}) {
-  const [cur, setCur] = useState("");
-  const [parent, setParent] = useState<string | null>(null);
-  const [entries, setEntries] = useState<BrowseEntry[]>([]);
-  const [busyDirs, setBusyDirs] = useState(false);
-
-  const open = useCallback(async (p: string) => {
-    setBusyDirs(true);
-    try {
-      const r = await apiFetch<{ path: string; parent: string | null; entries: BrowseEntry[] }>(
-        `/api/v1/devices/${deviceId}/local-dirs?path=${encodeURIComponent(p)}&files=1`,
-        token,
-      );
-      setCur(r.path); setParent(r.parent); setEntries(r.entries);
-    } catch { setEntries([]); }
-    finally { setBusyDirs(false); }
-  }, [deviceId, token]);
-
-  useEffect(() => { open(""); }, [open]);
-
-  return (
-    <div className="rounded-lg border border-[var(--color-border)]">
-      <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
-        <button className="btn btn-ghost !p-1" title="Up"
-          disabled={!parent} onClick={() => parent && open(parent)}>
-          <ArrowUp size={12} />
-        </button>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text-dim)]">
-          {cur || "Pick a location"}
-        </span>
-        {cur && cur !== "" && (
-          <button className="btn btn-ghost !px-2 !py-1 text-xs"
-            onClick={() => onPick(cur)}>
-            Select this folder
-          </button>
-        )}
-      </div>
-      <div className="max-h-56 overflow-y-auto p-1">
-        {busyDirs ? (
-          <div className="py-6 text-center"><Spinner /></div>
-        ) : entries.length === 0 ? (
-          <div className="py-6 text-center text-xs text-[var(--color-text-dim)]">Empty</div>
-        ) : (
-          entries.map((e) => (
-            <div key={e.path} className="group flex items-center">
-              <button
-                className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
-                  selected === e.path
-                    ? "bg-[rgba(139,92,246,0.15)] text-[var(--color-accent)]"
-                    : "hover:bg-[var(--color-surface-2)]"
-                }`}
-                onClick={() => e.kind === "file" ? onPick(e.path) : open(e.path)}>
-                {e.kind === "file"
-                  ? <FileText size={13} className="shrink-0 text-[var(--color-text-dim)]" />
-                  : <Folder size={13} className={`shrink-0 ${e.blocked ? "text-[var(--color-danger)]" : "text-[var(--color-warn)]"}`} />}
-                <span className="truncate">{e.name}</span>
-                {e.blocked && <span className="badge badge-red ml-auto">protected</span>}
-              </button>
-              {e.kind === "file" ? null : (
-                <button
-                  className="mr-1 shrink-0 rounded px-2 py-1 text-[10px] text-[var(--color-accent)] opacity-0 transition-opacity hover:bg-[var(--color-surface-2)] group-hover:opacity-100"
-                  onClick={() => !e.blocked && onPick(e.path)}>
-                  Share
-                </button>
-              )}
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
+const FILE_ROOT_RE = /\.[A-Za-z0-9]{1,8}$/;
 
 function bitsToRole(bits: number): string {
   if ((bits & 256) !== 0) return "manager";
@@ -153,9 +77,7 @@ export default function PermissionsPage() {
   const [role, setRole] = useState<string>("viewer");
   const [shareOpen, setShareOpen] = useState(false);
   const [pickDevice, setPickDevice] = useState("");
-  const [pickFolder, setPickFolder] = useState("");
-  const [pickAccess, setPickAccess] = useState<"read" | "readwrite">("read");
-  const [label, setLabel] = useState("");
+  const [modalRoots, setModalRoots] = useState<SharedFolderInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState<SharedFolder | null>(null);
@@ -237,29 +159,36 @@ export default function PermissionsPage() {
       .then(setGrants).catch(() => setGrants([]));
   }, [selectedShareId, token]);
 
-  async function createShare() {
-    if (!pickFolder || !pickDevice) return;
+  // modal: folders shared on the picked device (fresh fetch when it changes)
+  useEffect(() => {
+    if (!pickDevice || !token) { setModalRoots(null); return; }
+    let live = true;
+    setModalRoots(null);
+    apiFetch<{ folders: SharedFolderInfo[] }>(
+      `/api/v1/devices/${pickDevice}/folders`, token)
+      .then((r) => { if (live) setModalRoots(r.folders ?? []); })
+      .catch(() => { if (live) setModalRoots([]); });
+    return () => { live = false; };
+  }, [pickDevice, token]);
+
+  /** Pick a device-shared folder: create its share record (if needed) and
+   *  select it so the owner can grant colleagues access. */
+  async function shareRoot(r: SharedFolderInfo, existing?: SharedFolder) {
     setBusy(true); setError(null);
     try {
-      // 1. register the folder/file with the agent (it starts indexing)
-      await apiFetch(`/api/v1/devices/${pickDevice}/folders`, token!, {
-        method: "POST",
-        body: JSON.stringify({
-          path: pickFolder, access: pickAccess,
-          label: label || basename(pickFolder),
-        }),
-      });
-      // 2. create the share record so it can be granted to colleagues
-      await apiFetch("/api/v1/sharing", token!, {
-        method: "POST",
-        body: JSON.stringify({
-          device_id: pickDevice, root_path: pickFolder,
-          label: label || basename(pickFolder),
-        }),
-      });
-      setShareOpen(false); setPickFolder(""); setLabel(""); setPickAccess("read");
+      if (!existing) {
+        await apiFetch("/api/v1/sharing", token!, {
+          method: "POST",
+          body: JSON.stringify({
+            device_id: pickDevice, root_path: r.path,
+            label: r.label || basename(r.path),
+          }),
+        });
+      }
       await load();
-    } catch (e) { setError(e instanceof Error ? e.message : "failed"); }
+      setShareOpen(false); setPickDevice("");
+      setSelectedKey(`f:${pickDevice}:${normPath(r.path)}`);
+    } catch (e) { setError(e instanceof Error ? e.message : "could not share"); }
     finally { setBusy(false); }
   }
 
@@ -373,7 +302,8 @@ export default function PermissionsPage() {
         title="Permissions & Access Control"
         subtitle="Decide who can see your folders and what they can do — nothing is shared until you grant it."
         actions={
-          <button className="btn btn-primary" onClick={() => setShareOpen(true)}>
+          <button className="btn btn-primary"
+            onClick={() => { setPickDevice(devices[0]?.id ?? ""); setShareOpen(true); }}>
             <FolderPlus size={15} /> Share Folder
           </button>
         }
@@ -740,14 +670,14 @@ export default function PermissionsPage() {
       </div>
       )}
 
-      {/* share-folder modal: browse any folder OR file on your computer */}
+      {/* share modal: pick a folder already shared on the device */}
       {shareOpen && (
-        <Modal title="Share a folder or file" onClose={() => setShareOpen(false)} wide>
+        <Modal title="Share a folder or file"
+          subtitle="Pick one of the folders shared on this computer — add new ones from the Devices page."
+          onClose={() => setShareOpen(false)} wide>
           <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Computer</label>
           <select className="input mb-3 w-full" value={pickDevice}
-            onChange={(e) => {
-              setPickDevice(e.target.value); setPickFolder(""); setPickAccess("read");
-            }}>
+            onChange={(e) => setPickDevice(e.target.value)}>
             <option value="">Choose…</option>
             {devices.map((d) => (
               <option key={d.id} value={d.id}>{d.name} {d.status !== "online" ? "(offline)" : ""}</option>
@@ -755,40 +685,54 @@ export default function PermissionsPage() {
           </select>
 
           {pickDevice && (
-            <PathBrowser key={pickDevice} deviceId={pickDevice} token={token!}
-              selected={pickFolder} onPick={setPickFolder} />
-          )}
-
-          {pickFolder && (
-            <div className="mt-3">
-              <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Access level</label>
-              <div className="grid grid-cols-2 gap-2">
-                {(["read", "readwrite"] as const).map((a) => (
-                  <button key={a} onClick={() => setPickAccess(a)}
-                    className={`rounded-lg border p-2.5 text-left text-xs transition-colors ${
-                      pickAccess === a
-                        ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
-                        : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
-                    }`}>
-                    <div className="font-semibold">{a === "read" ? "Read only" : "Read & write"}</div>
-                    <div className="mt-0.5 text-[var(--color-text-dim)]">
-                      {a === "read" ? "Browse + download only" : "Needed for uploads & sync"}
-                    </div>
-                  </button>
-                ))}
+            <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
+              <div className="border-b border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-dim)]">
+                Folders shared on this device
               </div>
-              <label className="mb-1 mt-3 block text-xs text-[var(--color-text-dim)]">Shown as</label>
-              <input className="input w-full" placeholder="e.g. Project files"
-                value={label} onChange={(e) => setLabel(e.target.value)} />
+              <div className="max-h-64 overflow-y-auto p-1">
+                {modalRoots === null ? (
+                  <div className="py-8 text-center"><Spinner /></div>
+                ) : modalRoots.length === 0 ? (
+                  <div className="py-8 text-center text-xs leading-relaxed text-[var(--color-text-dim)]">
+                    Nothing shared on this computer yet —<br />
+                    share a folder or file from the Devices page first.
+                  </div>
+                ) : (
+                  modalRoots.map((r) => {
+                    const existing = owned.find(
+                      (s) => s.device_id === pickDevice
+                        && normPath(s.root_path) === normPath(r.path));
+                    return (
+                      <button key={r.path} disabled={busy}
+                        className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-[var(--color-surface-2)] disabled:opacity-60"
+                        onClick={() => shareRoot(r, existing)}>
+                        {FILE_ROOT_RE.test(r.label || r.path)
+                          ? <FileText size={14} className="shrink-0 text-[var(--color-text-dim)]" />
+                          : <Folder size={14} className="shrink-0 text-[var(--color-warn)]" />}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">
+                            {r.label || basename(r.path)}
+                          </span>
+                          <span className="block truncate text-[11px] text-[var(--color-text-dim)]">
+                            {r.path}
+                          </span>
+                        </span>
+                        {existing ? (
+                          <span className="badge badge-purple shrink-0">Already sharing</span>
+                        ) : (
+                          <span className="badge badge-gray shrink-0">
+                            {r.access === "readwrite" ? "Full access" : "View only"}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
           )}
 
           {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
-          <button className="btn btn-primary mt-4 w-full justify-center"
-            disabled={!pickFolder || busy} onClick={createShare}>
-            {busy ? <Spinner size={14} /> : <RefreshCw size={14} />}
-            Share {pickFolder ? `“${basename(pickFolder)}”` : ""}
-          </button>
         </Modal>
       )}
 
