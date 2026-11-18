@@ -166,13 +166,30 @@ async def test_two_agent_bidirectional_sync(backend, tmp_path):
                 lambda: not (root_b / "New folder").exists()
             ), "renamed empty folder left a ghost on the peer"
 
-            # deletes do NOT propagate: B removing its copy must not delete
-            # A's original — the file simply falls out of sync tracking.
+            # renaming a folder WITH content moves it wholesale — the old
+            # name disappears and contents come along without retransfer
+            (root_b / "made-on-B").rename(root_b / "movies")
+            assert await _wait_for(
+                lambda: (root_a / "movies" / "inner.txt").is_file()
+            ), "renamed folder contents did not move"
+            assert await _wait_for(
+                lambda: not (root_a / "made-on-B").exists()
+            ), "old folder name lingered after rename"
+
+            # a synced FILE rename is an in-place move, not a retransfer
+            (root_a / "seed.txt").rename(root_a / "seed-final.txt")
+            assert await _wait_for(
+                lambda: (root_b / "seed-final.txt").is_file()
+            ), "file rename did not propagate"
+            assert not (root_b / "seed.txt").exists()
+            assert (root_b / "seed-final.txt").read_text() == "edited on A"
+
+            # deletes DO propagate — but only for files still matching the
+            # synced content; a locally edited copy would survive
             (root_b / "newfile.md").unlink()
-            await asyncio.sleep(2)  # any (bad) propagation would have fired
-            assert (root_a / "newfile.md").exists(), \
-                "peer delete removed the original file"
-            assert not (root_b / "newfile.md").exists()
+            assert await _wait_for(
+                lambda: not (root_a / "newfile.md").exists()
+            ), "peer delete did not remove the unmodified copy"
 
             # pause stops propagation
             r = await http.post(f"/api/v1/sync/{session_id}/pause",

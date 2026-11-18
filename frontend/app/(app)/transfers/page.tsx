@@ -61,21 +61,25 @@ export default function TransfersPage() {
               .then((l) => ({ s, l })).catch(() => null)),
         );
         if (dead) return;
-        const out: SyncRow[] = [];
+        // both agents report the same transfer_id — dedupe, preferring the
+        // receiver's row since it carries the local drop location
+        const byId = new Map<string, SyncRow>();
         for (const item of lives) {
           if (!item) continue;
           for (const side of item.l.sides) {
             for (const t of side.transfers ?? []) {
-              if (t.session_id && t.session_id !== item.s.id) continue;
-              out.push({
-                key: `${side.device_id}:${t.id}`, t,
+              if (t.session_id !== item.s.id || !t.name) continue;
+              const existing = byId.get(t.id);
+              if (existing && existing.t.direction !== "out") continue;
+              byId.set(t.id, {
+                key: t.id, t,
                 sessionName: item.s.name,
                 deviceName: names.get(side.device_id) ?? "colleague's PC",
               });
             }
           }
         }
-        setSyncRows(out);
+        setSyncRows([...byId.values()]);
       } catch { /* backend unreachable — leave the last snapshot */ }
     };
     void tick();

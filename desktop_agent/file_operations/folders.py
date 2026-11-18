@@ -129,7 +129,24 @@ def _folder_rows(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _prune_missing(conn: sqlite3.Connection) -> None:
+    """Drop records for folders deleted on disk. A record whose whole drive
+    is offline (USB stick, network share) is kept — it may come back."""
+    rows = conn.execute("SELECT id, path FROM indexed_folders").fetchall()
+    gone = []
+    for r in rows:
+        p = Path(r["path"])
+        if not p.exists() and Path(p.anchor).exists():
+            gone.append(r["id"])
+    if not gone:
+        return
+    conn.executemany(
+        "DELETE FROM indexed_folders WHERE id = ?", [(i,) for i in gone])
+    conn.commit()
+
+
 async def op_list_folders(ctx: AgentContext, args: dict) -> dict:
+    _prune_missing(ctx.conn)
     folders = _folder_rows(ctx.conn)
     for f in folders:
         f["indexing"] = f["id"] in ctx.indexing

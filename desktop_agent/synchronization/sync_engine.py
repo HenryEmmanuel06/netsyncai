@@ -19,6 +19,7 @@ import base64
 import hashlib
 import logging
 import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -177,39 +178,47 @@ class SyncEngine:
     async def _emit_batch(self, rt: SyncRuntime, batch: list) -> None:
         if rt.paused:
             return
-        seen: dict[str, tuple] = {}  # rel_path -> (op, path, dest)
+        seen: dict[str, tuple] = {}  # rel_path -> (op, path, dest, priority)
+
+        def put(rel: str, op: str, p: Path, old=None, pri: int = 2) -> None:
+            cur = seen.get(rel)
+            if cur is None or pri >= cur[3]:
+                seen[rel] = (op, p, old, pri)
+
         for ev_type, src, dest, is_dir in batch:
             rel = self._rel(rt, Path(dest or src))
             if rel is None or self._ignored(rel) or self._suppressed(rt, rel):
                 continue
             p = Path(dest or src)
             if ev_type == "moved" and dest:
-                # a move = drop the old name + recreate under the new one;
-                # rmdir only removes empty dirs, so nothing is ever lost
                 old_rel = self._rel(rt, Path(src))
                 if old_rel and not self._ignored(old_rel):
-                    seen[old_rel] = ("rmdir" if is_dir else "delete", Path(src), None)
-                seen[rel] = ("dir" if is_dir else "modify", p, None)
-                if is_dir:
+                    # a true rename: the peer moves it in place — zero bytes
+                    put(rel, "rename", p, old_rel, 3)
+                else:
+                    put(rel, "dir" if p.is_dir() else "modify", p)
+                if p.is_dir():
+                    # still emit the subtree so a peer that never had the
+                    # folder converges instead of getting an empty one
                     for dp, dns, fns in os.walk(p):
                         dns[:] = [d for d in dns if d not in DEFAULT_IGNORES]
                         for dd in dns:
                             r2 = self._rel(rt, Path(dp) / dd)
                             if r2:
-                                seen.setdefault(r2, ("dir", Path(dp) / dd, None))
+                                put(r2, "dir", Path(dp) / dd, None, 1)
                         for fn in fns:
                             fp = Path(dp) / fn
                             r2 = self._rel(rt, fp)
                             if r2:
-                                seen.setdefault(r2, ("modify", fp, None))
+                                put(r2, "modify", fp, None, 1)
             elif p.is_dir():
-                seen[rel] = ("dir", p, None)
+                put(rel, "dir", p)
             elif ev_type == "deleted":
-                seen[rel] = ("rmdir" if is_dir else "delete", p, None)
+                put(rel, "rmdir" if is_dir else "delete", p, None, 4)
             else:
-                seen[rel] = ("modify", p, None)
+                put(rel, "modify", p)
 
-        for rel, (op, path, dest) in seen.items():
+        for rel, (op, path, dest, _pri) in seen.items():
             if rt.paused:
                 break
             ev = self._build_event(rt, rel, op, path, dest)
@@ -222,10 +231,23 @@ class SyncEngine:
         if op == "delete":
             return SyncEvent(session_id=rt.session_id, op_id=op_id,
                              op=SyncOpType.DELETE, rel_path=rel,
+                             sha256=self._base_sha(rt, rel),
                              from_device=self.device_id)
         if op == "dir":
             return SyncEvent(session_id=rt.session_id, op_id=op_id,
                              op=SyncOpType.DIR, rel_path=rel,
+                             from_device=self.device_id)
+        if op == "rename":
+            # `dest` carries the old rel_path for rename ops
+            if path.is_dir():
+                return SyncEvent(session_id=rt.session_id, op_id=op_id,
+                                 op=SyncOpType.RENAME, rel_path=rel,
+                                 old_rel_path=dest, from_device=self.device_id)
+            st = path.stat()
+            return SyncEvent(session_id=rt.session_id, op_id=op_id,
+                             op=SyncOpType.RENAME, rel_path=rel,
+                             old_rel_path=dest, sha256=sha256_file(path),
+                             size=st.st_size, mtime=st.st_mtime,
                              from_device=self.device_id)
         if op == "rmdir":
             return SyncEvent(session_id=rt.session_id, op_id=op_id,
@@ -432,14 +454,83 @@ class SyncEngine:
             await self._apply_write(rt, pseudo, base_sha=entry["sha256"] if local_sha else None)
 
     async def _apply_delete(self, rt: SyncRuntime, ev: SyncEvent) -> None:
-        # deletes do NOT propagate: a peer deleting a file never removes the
-        # local copy — the item just falls out of sync tracking.
-        self._clear_state(rt, ev.rel_path)
-        self._mark_suppressed(rt, ev.rel_path)
+        """Peer deleted a file — remove our copy only when it still matches
+        a known version. A locally edited copy always survives a delete."""
+        rel = ev.rel_path
+        if self._ignored(rel):
+            return
+        target = (rt.root / rel).resolve()
+        try:
+            target.relative_to(rt.root.resolve())
+        except ValueError:
+            return
+        self._mark_suppressed(rt, rel)
+        if target.is_file():
+            known = {s for s in (self._base_sha(rt, rel), ev.sha256) if s}
+            if sha256_file(target) in known:
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+                # drop parent dirs left empty by the delete
+                parent = target.parent
+                while parent != rt.root and parent.exists():
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    self._mark_suppressed(rt, self._rel(rt, parent) or rel)
+                    parent = parent.parent
+        self._clear_state(rt, rel)
 
     async def _apply_rename(self, rt: SyncRuntime, ev: SyncEvent) -> None:
-        # v1 emits delete+modify for moves, so RENAME events are a no-op
-        pass
+        """A real rename/move — performed with os.rename so no bytes cross
+        the wire. Falls back to fetching when we never had the item."""
+        rel, old = ev.rel_path, ev.old_rel_path
+        if not old or self._ignored(rel) or self._ignored(old):
+            return
+        root = rt.root.resolve()
+        src = (rt.root / old).resolve()
+        dst = (rt.root / rel).resolve()
+        try:
+            src.relative_to(root)
+            dst.relative_to(root)
+        except ValueError:
+            log.warning("sync path escape blocked: %s -> %s", old, rel)
+            return
+        if not src.exists():
+            if ev.sha256:
+                await self._apply_write(rt, ev)   # never had it — fetch it
+            else:
+                await self._apply_dir(rt, ev)     # never had the dir — make it
+            return
+        self._mark_suppressed(rt, old)
+        self._mark_suppressed(rt, rel)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists():
+            dst = dst.with_name(
+                f"{dst.stem}.conflict-{ev.from_device[:8]}{dst.suffix}")
+            self._mark_suppressed(rt, self._rel(rt, dst) or rel)
+            log.warning("rename conflict on %s — wrote %s", rel, dst.name)
+        src.rename(dst)
+        if dst.is_dir():
+            for dp, dns, fns in os.walk(dst):
+                dns[:] = [d for d in dns if d not in DEFAULT_IGNORES]
+                for n in (*dns, *fns):
+                    r2 = self._rel(rt, Path(dp) / n)
+                    if r2:
+                        self._mark_suppressed(rt, r2)
+        # slide the base-state rows over to the new name
+        for r in self.ctx.conn.execute(
+                "SELECT rel_path FROM sync_state WHERE session_id=?",
+                (rt.session_id,)).fetchall():
+            rp = r["rel_path"]
+            if rp == old or rp.startswith(old + os.sep):
+                self.ctx.conn.execute(
+                    "UPDATE sync_state SET rel_path=? "
+                    "WHERE session_id=? AND rel_path=?",
+                    (rel + rp[len(old):], rt.session_id, rp))
+        self.ctx.conn.commit()
 
     async def _apply_write(self, rt: SyncRuntime, ev: SyncEvent, base_sha: str | None = None) -> None:
         rel = ev.rel_path
@@ -460,9 +551,13 @@ class SyncEngine:
         base = base_sha if base_sha is not None else self._base_sha(rt, rel)
         conflict = bool(local_sha and base and local_sha != base)
 
-        content = await self._fetch(rt, ev, target)
-        if content is None:
-            return
+        # a copy of a file we already have lands as a local clone — the
+        # content never crosses the wire a second time
+        clone = self._find_by_sha(rt, ev.sha256) if ev.sha256 else None
+        if clone is None:
+            content = await self._fetch(rt, ev, target)
+            if content is None:
+                return
 
         dest = target
         if conflict:
@@ -474,7 +569,10 @@ class SyncEngine:
         self._mark_suppressed(rt, self._rel(rt, dest) or rel)
         tmp = dest.parent / PARTIAL_DIR / f"{uuid.uuid4().hex}.part"
         tmp.parent.mkdir(exist_ok=True)
-        tmp.write_bytes(content)
+        if clone is not None:
+            shutil.copyfile(clone, tmp)
+        else:
+            tmp.write_bytes(content)
         os.replace(tmp, dest)
         try:
             tmp.parent.rmdir()  # temp dir served its turn — don't litter
@@ -567,6 +665,30 @@ class SyncEngine:
             (rt.session_id, rel),
         ).fetchone()
         return row["sha256"] if row else None
+
+    def _find_by_sha(self, rt: SyncRuntime, sha: str) -> Path | None:
+        """An existing file inside this sync root with identical content —
+        lets a peer's 'copy' land as a local clone instead of a transfer."""
+        root = rt.root.resolve()
+        rels = [r["rel_path"] for r in self.ctx.conn.execute(
+            "SELECT rel_path FROM sync_state WHERE session_id=? AND sha256=?",
+            (rt.session_id, sha)).fetchall()]
+        folder = self.ctx.conn.execute(
+            "SELECT id FROM indexed_folders WHERE path=?",
+            (str(root),)).fetchone()
+        if folder is not None:
+            rels += [r["rel_path"] for r in self.ctx.conn.execute(
+                "SELECT rel_path FROM files WHERE folder_id=? AND sha256=? "
+                "AND deleted=0", (folder["id"], sha)).fetchall()]
+        for rel in rels:
+            cand = (rt.root / rel).resolve()
+            try:
+                cand.relative_to(root)
+            except ValueError:
+                continue
+            if cand.is_file() and sha256_file(cand) == sha:
+                return cand
+        return None
 
     def _record_state(self, rt: SyncRuntime, rel: str, sha: str, mtime: float) -> None:
         if not sha:

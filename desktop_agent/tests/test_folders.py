@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -104,6 +105,15 @@ async def test_add_list_remove_folder(ctx, sample_tree, allow_tmp):
     assert (await FOLDER_HANDLERS["list_folders"](ctx, {}))["folders"] == []
     with pytest.raises(OpDenied):
         await HANDLERS["browse_folder"](ctx, {"path": str(sample_tree)})
+
+
+async def test_list_folders_prunes_deleted_roots(ctx, sample_tree, allow_tmp):
+    """A shared folder deleted in Explorer stops showing on next list."""
+    await FOLDER_HANDLERS["add_folder"](
+        ctx, {"path": str(sample_tree), "access": "read"})
+    shutil.rmtree(sample_tree)
+    listed = (await FOLDER_HANDLERS["list_folders"](ctx, {}))["folders"]
+    assert listed == []
 
 
 async def test_add_blocked_folder_denied(ctx):
