@@ -194,14 +194,25 @@ class SupabaseDeviceStore:
             if r.status_code != 400:
                 r.raise_for_status()
                 for dev in r.json():
-                    r = await self._client.patch(
-                        "/devices", params={"id": f"eq.{dev['id']}"},
-                        json={"credential_hash": _hash(credential),
-                              "name": rec["device_name"],
-                              "agent_version": agent_version},
-                    )
-                    r.raise_for_status()
-                    return DeviceResponse(**r.json()[0]), credential, owner_email
+                    dev = await self._resume_device(
+                        dev["id"], rec["device_name"], agent_version, credential)
+                    return dev, credential, owner_email
+        else:
+            # no fingerprint (older agent): a same-name re-pair is almost
+            # certainly the same PC reconnecting — resume its record rather
+            # than minting a duplicate the user must clean up
+            r = await self._client.get(
+                "/devices",
+                params={"owner_id": f"eq.{rec['owner_id']}",
+                        "name": f"eq.{rec['device_name']}",
+                        "revoked_at": "is.null"},
+            )
+            r.raise_for_status()
+            for dev in r.json():
+                dev = await self._resume_device(
+                    dev["id"], rec["device_name"], agent_version, credential)
+                return dev, credential, owner_email
+
         body = {
             "owner_id": rec["owner_id"],
             "name": rec["device_name"],
@@ -214,8 +225,34 @@ class SupabaseDeviceStore:
         if r.status_code == 400 and machine_id:
             body.pop("machine_id")  # migration not applied — pair anyway
             r = await self._client.post("/devices", json=body)
+        # a genuinely different PC that picked a name already in use gets an
+        # automatic suffix — devices.name is unique per owner, so a second
+        # "mezie" becomes "mezie (2)" instead of failing the pairing
+        for i in range(2, 30):
+            if r.status_code != 409:
+                break
+            body["name"] = f"{rec['device_name']} ({i})"
+            r = await self._client.post("/devices", json=body)
         r.raise_for_status()
         return DeviceResponse(**r.json()[0]), credential, owner_email
+
+    async def _resume_device(
+        self, device_id: str, name: str, agent_version: str | None,
+        credential: str,
+    ) -> DeviceResponse:
+        """Rotate a device's credential + apply the new pairing name.
+        If the name is now taken by another device, keep the old one —
+        resuming must never fail over cosmetics."""
+        body: dict = {"credential_hash": _hash(credential),
+                      "name": name, "agent_version": agent_version}
+        r = await self._client.patch(
+            "/devices", params={"id": f"eq.{device_id}"}, json=body)
+        if r.status_code == 409:
+            body.pop("name")
+            r = await self._client.patch(
+                "/devices", params={"id": f"eq.{device_id}"}, json=body)
+        r.raise_for_status()
+        return DeviceResponse(**r.json()[0])
 
     async def preview_pairing(self, code: str) -> dict:
         r = await self._client.get(

@@ -329,11 +329,32 @@ class InMemoryDeviceStore:
                     d["name"] = record["device_name"]
                     d["agent_version"] = agent_version
                     return DeviceResponse(**d), credential, owner_email
+        else:
+            # no fingerprint (older agent): a same-name re-pair is almost
+            # certainly the same PC reconnecting — resume its record rather
+            # than minting a duplicate
+            for d in self._devices.values():
+                if (d["name"] == record["device_name"]
+                        and d["owner_id"] == record["owner_id"]
+                        and not d.get("revoked_at")):
+                    d["credential_hash"] = _hash_secret(credential)
+                    d["agent_version"] = agent_version
+                    return DeviceResponse(**d), credential, owner_email
+
+        # devices.name is unique per owner — a genuinely different PC that
+        # picked a taken name gets a suffix instead of a 500
+        name = record["device_name"]
+        taken = {d["name"] for d in self._devices.values()
+                 if d["owner_id"] == record["owner_id"] and not d.get("revoked_at")}
+        i = 2
+        while name in taken:
+            name = f"{record['device_name']} ({i})"
+            i += 1
         device_id = str(uuid.uuid4())
         self._devices[device_id] = {
             "id": device_id,
             "owner_id": record["owner_id"],
-            "name": record["device_name"],
+            "name": name,
             "platform": "windows",
             "agent_version": agent_version,
             "machine_id": machine_id,

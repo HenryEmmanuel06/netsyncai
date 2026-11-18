@@ -13,7 +13,7 @@ import {
 import { basename, formatBytes } from "@/lib/format";
 import type { Device, SharedFolder, SharedFolderInfo, SyncSession } from "@/types";
 
-interface LiveSync { applied_ops: number; pending_ops: number; sides: { device_id: string; online: boolean; paused: boolean }[] }
+interface LiveSync { applied_ops: number; pending_ops: number; sides: { device_id: string; name?: string; online: boolean; gone?: boolean; paused: boolean }[] }
 
 function useLive(sessionId: string, token: string, enabled: boolean) {
   const [live, setLive] = useState<LiveSync | null>(null);
@@ -48,6 +48,18 @@ function SessionCard({ s, token, deviceName, onAction, onStop }: {
   const title = basename(a?.root ?? "") || "Sync";
   const sideOnline = (id?: string) => live?.sides.find((x) => x.device_id === id)?.online;
 
+  // real liveness: "active" only counts when every side is actually running
+  // the session — a dead peer means the sync is broken, not syncing
+  const deadSide = s.state === "active" ? live?.sides.find((x) => x.gone) : undefined;
+  const offSide = s.state === "active" ? live?.sides.find((x) => !x.gone && !x.online) : undefined;
+  const badge = s.state === "active" && live
+    ? deadSide
+      ? { label: "Peer device removed", cls: "badge-red" }
+      : offSide
+        ? { label: `Waiting for ${offSide.name || deviceName(offSide.device_id)}`, cls: "badge-amber" }
+        : meta
+    : meta;
+
   return (
     <div className="card card-hover flex flex-col overflow-hidden">
       <div className="flex items-start gap-3 p-4">
@@ -55,9 +67,9 @@ function SessionCard({ s, token, deviceName, onAction, onStop }: {
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{title}</div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <span className={`badge ${meta.cls}`}>
-              {s.state === "active" && <RefreshCw size={10} className="spin-slow" />}
-              {meta.label}
+            <span className={`badge ${badge.cls}`}>
+              {s.state === "active" && !deadSide && !offSide && <RefreshCw size={10} className="spin-slow" />}
+              {badge.label}
             </span>
             <span className="pill">{s.mode === "review" ? "Review mode" : "Live"}</span>
           </div>
@@ -86,6 +98,14 @@ function SessionCard({ s, token, deviceName, onAction, onStop }: {
           <ArrowLeftRight size={13} />
         </span>
       </div>
+
+      {(deadSide || offSide) && (
+        <div className="mx-4 mb-4 rounded-md border border-[rgba(251,191,36,0.25)] bg-[rgba(251,191,36,0.08)] px-3 py-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+          {deadSide
+            ? "The other device no longer exists — stop this sync and start a new one between your current devices."
+            : `${offSide!.name || deviceName(offSide!.device_id)} is offline. The sync resumes automatically when it reconnects.`}
+        </div>
+      )}
 
       <div className="mt-auto grid grid-cols-3 border-t border-[var(--color-border)] bg-[rgba(0,0,0,0.15)] text-[11px]">
         {[

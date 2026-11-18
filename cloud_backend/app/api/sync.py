@@ -245,8 +245,18 @@ async def sync_live(
     sides = []
     for p in session["participants"]:
         side = {"device_id": p["device_id"], "root": p["root"], "online": False,
-                "applied_ops": 0, "emitted_ops": 0, "pending_ops": 0,
-                "paused": False, "transfers": []}
+                "gone": False, "name": "", "applied_ops": 0, "emitted_ops": 0,
+                "pending_ops": 0, "paused": False, "transfers": []}
+        try:
+            dev = await store.get_device_by_id(p["device_id"])
+            side["name"] = dev.name
+            side["gone"] = dev.revoked_at is not None
+        except DeviceNotFound:
+            side["gone"] = True
+            side["name"] = "removed device"
+        if side["gone"]:
+            sides.append(side)  # a dead device can never report in
+            continue
         try:
             res = await dispatch(p["device_id"], "get_device_status", {}, timeout=10)
             sess = (res.get("sync_sessions") or {}).get(session_id)

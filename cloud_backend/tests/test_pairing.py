@@ -92,6 +92,45 @@ async def test_repairing_same_machine_resumes_device(client, auth_headers):
         d2["device_id"], d2["device_credential"])
 
 
+async def test_repairing_same_name_resumes_device(client, auth_headers):
+    # an older agent (no fingerprint) re-pairing with the same device name
+    # must resume the record — same device_id, rotated credential — not
+    # die on the unique (owner_id, name) constraint
+    first = await _create_code(client, auth_headers, "mezie")
+    r1 = await client.post("/api/v1/pairing/redeem", json={"code": first["code"]})
+    assert r1.status_code == 200
+    d1 = r1.json()
+
+    second = await _create_code(client, auth_headers, "mezie")
+    r2 = await client.post("/api/v1/pairing/redeem", json={"code": second["code"]})
+    assert r2.status_code == 200, r2.text
+    d2 = r2.json()
+    assert d2["device_id"] == d1["device_id"]
+    assert d2["device_credential"] != d1["device_credential"]
+
+    r = await client.get("/api/v1/devices", headers=auth_headers)
+    assert [d["name"] for d in r.json()] == ["mezie"]
+
+
+async def test_same_name_on_different_machine_gets_suffix(client, auth_headers):
+    # a genuinely different PC with the same name gets 'name (2)' —
+    # it must not take over the first device's identity
+    first = await _create_code(client, auth_headers, "office-pc")
+    r1 = await client.post(
+        "/api/v1/pairing/redeem",
+        json={"code": first["code"], "machine_id": "machine-A"})
+    assert r1.status_code == 200
+
+    second = await _create_code(client, auth_headers, "office-pc")
+    r2 = await client.post(
+        "/api/v1/pairing/redeem",
+        json={"code": second["code"], "machine_id": "machine-B"})
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["device_id"] != r1.json()["device_id"]
+    assert d2["device_name"] == "office-pc (2)"
+
+
 async def test_machine_id_does_not_cross_owner(
     client, auth_headers, other_auth_headers
 ):
