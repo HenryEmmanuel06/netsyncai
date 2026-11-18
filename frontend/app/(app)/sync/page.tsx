@@ -186,6 +186,48 @@ type SyncRequest = SyncSession & {
   my_device_name?: string; my_root?: string; needs_folder?: boolean;
 };
 
+interface InlineOption { value: string; label: string; hint?: string; icon?: React.ReactNode }
+
+/** Barebones expandable picker — plain divs, expands in-flow inside the
+ *  card so nothing (clipping, stacking, positioning) can hide it. */
+function InlinePick({ value, placeholder, options, onPick, className = "w-48" }: {
+  value: string; placeholder: string; options: InlineOption[];
+  onPick: (v: string) => void; className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const cur = options.find((o) => o.value === value);
+  return (
+    <div className={className}>
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="input flex w-full items-center gap-2 !py-1.5 text-left text-xs">
+        <span className={`min-w-0 flex-1 truncate ${cur ? "" : "text-[var(--color-text-faint)]"}`}>
+          {cur?.label ?? placeholder}
+        </span>
+        <span className={`text-[10px] text-[var(--color-text-faint)] transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
+      </button>
+      {open && (
+        <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          {options.length === 0 ? (
+            <div className="px-3 py-2.5 text-[11px] text-[var(--color-warn)]">
+              No computers found on this account
+            </div>
+          ) : options.map((o) => (
+            <button key={o.value} type="button"
+              onClick={() => { onPick(o.value); setOpen(false); }}
+              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--color-surface-3)] ${
+                o.value === value ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"
+              }`}>
+              {o.icon}
+              <span className="min-w-0 flex-1 truncate">{o.label}</span>
+              {o.hint && <span className="shrink-0 text-[10px] text-[var(--color-text-faint)]">{o.hint}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Incoming sync-request banner. Requests addressed to the recipient by
  *  email need them to pick the local folder before accepting. */
 function RequestCard({ r, devices, token, onRespond }: {
@@ -271,15 +313,15 @@ function RequestCard({ r, devices, token, onRespond }: {
           <div className="mt-3 space-y-2 border-t border-[var(--color-border)] pt-3">
             <div className="flex flex-wrap items-center gap-2">
               <Monitor size={13} className="text-[var(--color-text-faint)]" />
-              <Dropdown className="w-48 text-xs" value={dev}
+              <InlinePick className="w-48" value={dev}
                 placeholder="Your computer…"
-                onChange={(v) => { setDev(v); setRoot(""); }}
+                onPick={(v) => { setDev(v); setRoot(""); }}
                 options={devOptions} />
-              {ownDevices.length === 0 && (
-                <span className="text-[11px] text-[var(--color-warn)]">
-                  No computers on this account — check the Devices page
-                </span>
-              )}
+              <span className="text-[11px] text-[var(--color-text-faint)]">
+                {ownDevices.length === 0
+                  ? "no computers on this account"
+                  : `${ownDevices.length} computer${ownDevices.length === 1 ? "" : "s"}`}
+              </span>
               {dev && (
                 <div className="flex overflow-hidden rounded-lg border border-[var(--color-border)] text-xs">
                   <button
@@ -302,9 +344,9 @@ function RequestCard({ r, devices, token, onRespond }: {
             )}
             {dev && destKind === "pick" && (
               folders === null ? <Spinner size={14} /> : (
-                <Dropdown className="w-56 text-xs" value={root}
+                <InlinePick className="w-56" value={root}
                   placeholder="Shared folder to sync into…"
-                  onChange={(v) => setRoot(v)}
+                  onPick={(v) => setRoot(v)}
                   options={folders.map((f) => ({
                     value: f.path, label: f.label || basename(f.path),
                   }))} />
