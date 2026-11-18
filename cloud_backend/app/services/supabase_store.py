@@ -625,12 +625,13 @@ class SupabaseDeviceStore:
         r = await self._client.get(
             "/shared_folders",
             params={"owner_id": f"eq.{owner_id}",
-                    "select": "*,devices(name)"},
+                    "select": "*,devices(name,revoked_at)"},
         )
         r.raise_for_status()
         return [
             {**self._share_row(s), "device_name": (s.get("devices") or {}).get("name", "")}
             for s in r.json()
+            if not (s.get("devices") or {}).get("revoked_at")
         ]
 
     async def _blockers_of(self, user_id: str) -> set[str]:

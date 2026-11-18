@@ -142,9 +142,9 @@ export default function PermissionsPage() {
       }
     }
     // Share records we can't verify (device offline) still show so grants
-    // stay manageable; ones a live device says are gone drop out.
+    // stay manageable; shares of deleted/revoked devices drop out.
     for (const s of owned) {
-      if (matched.has(s.id) || roots[s.device_id]) continue;
+      if (matched.has(s.id) || !(s.device_id in roots)) continue;
       out.push({
         key: `s:${s.id}`, deviceId: s.device_id,
         deviceName: s.device_name || "your device",

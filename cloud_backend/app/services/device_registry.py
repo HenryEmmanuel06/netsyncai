@@ -524,6 +524,9 @@ class InMemoryDeviceStore:
         return [
             s for s in getattr(self, "_shares", {}).values()
             if s["owner_id"] == owner_id
+            # revoked/missing devices take their shares with them
+            and not getattr(self, "_devices", {}).get(s["device_id"], {}).get("revoked_at")
+            and s["device_id"] in getattr(self, "_devices", {})
         ]
 
     async def list_shares_granted(self, user_id: str) -> list[dict]:
