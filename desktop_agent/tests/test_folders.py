@@ -143,6 +143,47 @@ async def test_add_folder_create_flag_makes_dir(ctx, tmp_path, allow_tmp):
     assert [f["path"] for f in listed] == [r["path"]]
 
 
+async def test_add_folder_unique_avoids_collisions(ctx, tmp_path, allow_tmp):
+    """Two incoming 'methic' syncs must land in different folders — never
+    silently merge into one directory."""
+    downloads = tmp_path / "Downloads"
+    r1 = await FOLDER_HANDLERS["add_folder"](ctx, {
+        "path": str(downloads / "methic"), "access": "readwrite",
+        "create": True, "unique": True,
+    })
+    r2 = await FOLDER_HANDLERS["add_folder"](ctx, {
+        "path": str(downloads / "methic"), "access": "readwrite",
+        "create": True, "unique": True,
+    })
+    assert r1["path"] != r2["path"]
+    assert Path(r1["path"]).name == "methic"
+    assert Path(r2["path"]).name == "methic (2)"
+    assert Path(r2["path"]).is_dir()
+    assert r2["label"] == "methic (2)"
+
+    # a name already registered but missing on disk also bumps —
+    # syncing into a "dead" share path would resurrect the wrong folder
+    shutil.rmtree(downloads / "methic")
+    r3 = await FOLDER_HANDLERS["add_folder"](ctx, {
+        "path": str(downloads / "methic"), "access": "readwrite",
+        "create": True, "unique": True,
+    })
+    assert Path(r3["path"]).name == "methic (3)"
+
+
+async def test_add_folder_unique_respects_unregistered_dirs(ctx, tmp_path,
+                                                            allow_tmp):
+    # the path exists on disk but isn't a NetSync share — reusing it would
+    # inject synced files into a personal folder, so take the next free name
+    personal = tmp_path / "Downloads" / "methic"
+    personal.mkdir(parents=True)
+    r = await FOLDER_HANDLERS["add_folder"](ctx, {
+        "path": str(personal), "access": "readwrite",
+        "create": True, "unique": True,
+    })
+    assert Path(r["path"]).name == "methic (2)"
+
+
 async def test_add_file_share(ctx, sample_tree, allow_tmp):
     """A single file can be shared — it's registered and indexed as itself."""
     f = sample_tree / "README.md"

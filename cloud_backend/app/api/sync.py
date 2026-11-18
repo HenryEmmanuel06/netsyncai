@@ -136,9 +136,11 @@ async def _downloads_root(session: dict, device_id: str) -> str:
     name = _safe_folder_name(src or session["name"])
     target = dl.rstrip("\\") + "\\" + name
     try:
+        # unique: a second colleague's "methic" must not merge into the
+        # first one's Downloads\methic — the agent picks methic (2), (3)…
         res = await dispatch(device_id, "add_folder",
                              {"path": target, "access": "readwrite",
-                              "label": name, "create": True}, timeout=15)
+                              "create": True, "unique": True}, timeout=15)
     except (DeviceOffline, CommandFailed) as exc:
         raise http_409(str(getattr(exc, "error", exc)))
     return res.get("path", target)

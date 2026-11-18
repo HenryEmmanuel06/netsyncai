@@ -195,6 +195,18 @@ def _find(ctx: AgentContext, raw: str) -> dict:
     raise OpDenied("folder is not shared on this device")
 
 
+def _unique_name(target: Path, conn: sqlite3.Connection) -> Path:
+    """First free candidate: `name`, `name (2)`, `name (3)`… Free means
+    neither on disk nor already a registered share — two incoming syncs
+    must never silently merge into one local folder."""
+    taken = {_norm(f["path"]) for f in _folder_rows(conn)}
+    for i in range(100):
+        cand = target if i == 0 else target.with_name(f"{target.name} ({i + 1})")
+        if not cand.exists() and _norm(cand) not in taken:
+            return cand
+    raise OpDenied("couldn't find a free folder name for the sync")
+
+
 async def op_add_folder(ctx: AgentContext, args: dict) -> dict:
     raw = args.get("path", "")
     access = args.get("access", "read")
@@ -204,8 +216,11 @@ async def op_add_folder(ctx: AgentContext, args: dict) -> dict:
     if not raw or not target.is_absolute():
         raise OpDenied("not a file or folder on this computer")
     target = target.resolve()
+    unique = bool(args.get("unique"))
+    if unique:
+        target = _unique_name(target, ctx.conn)
     exists = target.is_dir() or target.is_file()
-    if not exists and not args.get("create"):
+    if not exists and not (args.get("create") or unique):
         raise OpDenied("not a file or folder on this computer")
     if reason := is_blocked(target, ctx.data_dir):
         raise OpDenied(reason)
@@ -214,7 +229,8 @@ async def op_add_folder(ctx: AgentContext, args: dict) -> dict:
             target.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise OpDenied(f"couldn't create folder: {exc.strerror or exc}")
-    label = (args.get("label") or target.name or str(target))[:120]
+    label = (target.name if unique else
+             (args.get("label") or target.name or str(target)))[:120]
     folder_id = register_folder(ctx.conn, target, label=label, access=access)
     ctx.indexing.add(folder_id)  # visible as "indexing" immediately
     task = asyncio.create_task(_run_index(ctx, folder_id))
