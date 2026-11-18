@@ -479,85 +479,67 @@ export default function PermissionsPage() {
       )}
 
       {tab === "folders" && (
-      <div className="grid gap-5 lg:grid-cols-[300px_1fr]">
-        {/* left: shared folders */}
-        <div>
-          <div className="input mb-3 flex items-center gap-2 !py-2">
-            <Search size={14} className="text-[var(--color-text-dim)]" />
-            <input className="w-full bg-transparent text-sm outline-none"
-              placeholder="Search folders…" value={filter}
-              onChange={(e) => setFilter(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            {filtered.map((f) => (
-              <button key={f.key} onClick={() => setSelectedKey(f.key)}
-                className={`card w-full p-3 text-left transition-colors ${
-                  selected?.key === f.key ? "border-[var(--color-primary)]" : "card-hover"
-                }`}>
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[rgba(251,191,36,0.12)]">
-                    <FolderPlus size={15} className="text-[var(--color-warn)]" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{f.label}</div>
-                    <div className="truncate text-xs text-[var(--color-text-dim)]">{f.path}</div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      <span className="pill">{f.deviceName}</span>
-                      {f.access === "readwrite" ? (
-                        <span className="badge badge-purple">Full access</span>
-                      ) : f.access === "read" ? (
-                        <span className="badge badge-gray">View only</span>
-                      ) : (
-                        <span className="badge badge-amber">device offline</span>
-                      )}
-                      {f.indexing && (
-                        <span className="badge badge-amber">
-                          indexing…{f.index_total ? ` ${Math.round(((f.index_done ?? 0) / f.index_total) * 100)}%` : ""}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </button>
-            ))}
-            {filtered.length === 0 && (
-              <EmptyState icon={<FolderPlus size={18} />} title="Nothing shared yet"
-                hint="Share a folder from the Devices page (or the button above), then grant colleagues access here." />
-            )}
-          </div>
-
-          {granted.length > 0 && (
-            <>
-              <div className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-dim)]">
-                Shared with you
-              </div>
-              <div className="space-y-2">
-                {granted.map((s) => (
-                  <div key={s.grant_id ?? s.id} className="card p-3">
-                    <div className="truncate text-sm font-medium">{s.label || basename(s.root_path)}</div>
-                    <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-[var(--color-text-dim)]">
-                      <span className="truncate">
-                        on {s.device_name} · <span className="capitalize">{bitsToRole(s.permissions ?? 0)}</span>
-                      </span>
-                      {(s.permissions ?? 0) < 255 && (
-                        <button className="shrink-0 text-[var(--color-accent)] hover:underline"
-                          onClick={() => requestUpgrade(s)}>
-                          Request access
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
+      <div>
+        {/* shared folders — card grid */}
+        <div className="input mb-4 flex max-w-md items-center gap-2 !py-2">
+          <Search size={14} className="text-[var(--color-text-dim)]" />
+          <input className="w-full bg-transparent text-sm outline-none"
+            placeholder="Search folders…" value={filter}
+            onChange={(e) => setFilter(e.target.value)} />
         </div>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
+          {filtered.map((f) => (
+            <button key={f.key} onClick={() => setSelectedKey(f.key)}
+              className={`card p-4 text-left transition-colors ${
+                selected?.key === f.key
+                  ? "border-[var(--color-primary)] ring-1 ring-[var(--color-primary)]"
+                  : "card-hover"
+              }`}>
+              <div className="flex flex-col items-center pt-1 text-center">
+                <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[rgba(251,146,60,0.12)]">
+                  <Folder size={38} className="text-[var(--color-warn)]" />
+                </span>
+                <div className="mt-2.5 w-full truncate text-sm font-semibold">{f.label}</div>
+                <span className="pill mt-1">{f.deviceName}</span>
+              </div>
+              <div className="mt-3 space-y-1 border-t border-[var(--color-border)] pt-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--color-text-dim)]">Owner</span>
+                  <span className="font-medium">You</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--color-text-dim)]">Access</span>
+                  <span className={`font-medium ${
+                    f.access === "readwrite" ? "text-[var(--color-accent)]"
+                    : f.access === "read" ? "text-[var(--color-text)]"
+                    : "text-[var(--color-warn)]"}`}>
+                    {f.access === "readwrite" ? "Full" : f.access === "read" ? "View only" : "Offline"}
+                  </span>
+                </div>
+                {f.indexing && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--color-text-dim)]">Indexing</span>
+                    <span className="font-medium text-[var(--color-warn)]">
+                      {f.index_total
+                        ? `${Math.round(((f.index_done ?? 0) / f.index_total) * 100)}%`
+                        : `${f.index_done ?? 0} files`}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+        {filtered.length === 0 && (
+          <EmptyState icon={<FolderPlus size={18} />} title="Nothing shared yet"
+            hint="Share a folder from the Devices page (or the button above), then grant colleagues access here." />
+        )}
 
-        {/* right: detail */}
-        <div>
+        {/* detail for the selected card */}
+        <div className="mt-6">
           {!selected ? (
             <EmptyState icon={<ShieldCheck size={20} />} title="Select a shared folder"
-              hint="Pick a folder on the left to manage who has access." />
+              hint="Pick a folder above to manage who has access." />
           ) : (
             <div className="card p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -649,54 +631,84 @@ export default function PermissionsPage() {
                 </table>
               </div>
 
-              {addOpen && (
-                <div className="fade-up mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-                  <div className="mb-3 text-sm font-medium">Grant access</div>
-                  <input className="input w-full" value={subject} autoFocus
-                    placeholder="Colleague's email, @handle, or user ID"
-                    onChange={(e) => setSubject(e.target.value)} />
-                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                    {ROLES.map((r) => {
-                      const locked = selectedReadOnly && r.key !== "viewer";
-                      return (
-                        <button key={r.key} disabled={locked} onClick={() => setRole(r.key)}
-                          className={`rounded-lg border p-3 text-left transition-colors ${
-                            role === r.key && !locked
-                              ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
-                              : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
-                          } ${locked ? "cursor-not-allowed opacity-45" : ""}`}>
-                          <div className="flex items-center justify-between">
-                            <r.icon size={15}
-                              className={role === r.key && !locked ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
-                            {locked && <Lock size={11} className="text-[var(--color-text-faint)]" />}
-                          </div>
-                          <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
-                          <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">
-                            {locked ? "Needs read & write on the device" : r.desc}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {selectedReadOnly && (
-                    <p className="mt-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
-                      “{selected.label}” was shared with read-only access on {selected.deviceName} —
-                      switch it to read &amp; write on the Devices page to grant Editor or Manager.
-                    </p>
-                  )}
-                  {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
-                  <div className="mt-4 flex justify-end gap-2">
-                    <button className="btn btn-ghost" onClick={() => { setAddOpen(false); setError(null); }}>Cancel</button>
-                    <button className="btn btn-primary" disabled={busy || !subject.trim()} onClick={addGrant}>
-                      {busy ? <Spinner size={14} /> : <UserPlus size={14} />} Grant access
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
+
+        {granted.length > 0 && (
+          <>
+            <div className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-dim)]">
+              Shared with you
+            </div>
+            <div className="space-y-2">
+              {granted.map((s) => (
+                <div key={s.grant_id ?? s.id} className="card p-3">
+                  <div className="truncate text-sm font-medium">{s.label || basename(s.root_path)}</div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-[var(--color-text-dim)]">
+                    <span className="truncate">
+                      on {s.device_name} · <span className="capitalize">{bitsToRole(s.permissions ?? 0)}</span>
+                    </span>
+                    {(s.permissions ?? 0) < 255 && (
+                      <button className="shrink-0 text-[var(--color-accent)] hover:underline"
+                        onClick={() => requestUpgrade(s)}>
+                        Request access
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
+      )}
+
+      {/* grant access modal */}
+      {addOpen && selected && (
+        <Modal title={`Grant access — ${selected.label}`}
+          subtitle={`${selected.path} · on ${selected.deviceName}`}
+          icon={<UserPlus size={16} className="text-[var(--color-accent)]" />}
+          onClose={() => { setAddOpen(false); setError(null); }} wide>
+          <input className="input w-full" value={subject} autoFocus
+            placeholder="Colleague's email, @handle, or user ID"
+            onChange={(e) => setSubject(e.target.value)} />
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            {ROLES.map((r) => {
+              const locked = selectedReadOnly && r.key !== "viewer";
+              return (
+                <button key={r.key} disabled={locked} onClick={() => setRole(r.key)}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    role === r.key && !locked
+                      ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
+                      : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+                  } ${locked ? "cursor-not-allowed opacity-45" : ""}`}>
+                  <div className="flex items-center justify-between">
+                    <r.icon size={15}
+                      className={role === r.key && !locked ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
+                    {locked && <Lock size={11} className="text-[var(--color-text-faint)]" />}
+                  </div>
+                  <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
+                  <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">
+                    {locked ? "Needs read & write on the device" : r.desc}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {selectedReadOnly && (
+            <p className="mt-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+              “{selected.label}” was shared with read-only access on {selected.deviceName} —
+              switch it to read &amp; write on the Devices page to grant Editor or Manager.
+            </p>
+          )}
+          {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
+          <div className="mt-4 flex justify-end gap-2">
+            <button className="btn btn-ghost" onClick={() => { setAddOpen(false); setError(null); }}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !subject.trim()} onClick={addGrant}>
+              {busy ? <Spinner size={14} /> : <UserPlus size={14} />} Grant access
+            </button>
+          </div>
+        </Modal>
       )}
 
       {/* share modal: pick a folder already shared on the device */}
