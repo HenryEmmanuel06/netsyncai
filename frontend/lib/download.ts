@@ -56,9 +56,18 @@ export function useAgentDownload(): { url: string; label: string; note?: string 
         if (!alive || !rel) return;
         const assets: { name?: string; browser_download_url?: string }[] =
           rel.assets ?? [];
-        const hit = assets.find((a) => a.name === want);
+        const hit = assets.find((a) => a.name === want
+          || (isMac() && a.name?.startsWith(MAC_ASSET)));
         if (hit?.browser_download_url) {
-          setResolved({ url: hit.browser_download_url });
+          setResolved({
+            url: hit.browser_download_url,
+            note: isMac()
+              ? "Unzip the download, then right-click → Open “NetSync Agent.command” " +
+                "(Gatekeeper asks once — the app isn't signed yet). First run unpacks " +
+                "its bundled Python and installs components — needs internet once, then " +
+                "the NetSync window opens and stays connected while it runs."
+              : undefined,
+          });
         } else if (isMac() && rel.tag_name) {
           setResolved({
             url: `https://github.com/${repo}/archive/refs/tags/${rel.tag_name}.zip`,

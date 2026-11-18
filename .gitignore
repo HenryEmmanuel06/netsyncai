@@ -34,3 +34,8 @@ Thumbs.db
 
 # Inno Setup output
 installer/Output/
+
+# macOS bundle build artifacts
+mac_bundle/
+netsync-agent-macos*.zip
+make_mac_zip.py
