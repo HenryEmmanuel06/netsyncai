@@ -41,16 +41,17 @@ export function Dropdown({ value, options, onChange, placeholder = "Choose…", 
     measure();
     const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    const close = () => setOpen(false);               // any scroll resyncs the anchor
+    // reposition on scroll/resize — closing here raced the focus-scroll
+    // that fires when the button gets clicked, hiding the menu instantly
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
     };
   }, [open, align]);
 

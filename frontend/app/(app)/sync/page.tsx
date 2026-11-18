@@ -197,6 +197,17 @@ function RequestCard({ r, devices, token, onRespond }: {
   const [folders, setFolders] = useState<SharedFolderInfo[] | null>(null);
   const [root, setRoot] = useState("");
   const [destKind, setDestKind] = useState<"downloads" | "pick">("downloads");
+  const [ownDevices, setOwnDevices] = useState<Device[]>(devices);
+
+  // the request can arrive before the page's device fetch lands — fall
+  // back to fetching our own devices so the picker is never empty
+  useEffect(() => { setOwnDevices(devices); }, [devices]);
+  useEffect(() => {
+    if (devices.length || !r.needs_folder) return;
+    apiFetch<Device[]>("/api/v1/devices", token)
+      .then((d) => setOwnDevices(d.filter((x) => !x.revoked_at)))
+      .catch(() => {});
+  }, [devices.length, r.needs_folder, token]);
 
   useEffect(() => {
     if (!dev || !token) { setFolders(null); return; }
@@ -256,7 +267,7 @@ function RequestCard({ r, devices, token, onRespond }: {
               <Dropdown className="w-48 text-xs" value={dev}
                 placeholder="Your computer…"
                 onChange={(v) => { setDev(v); setRoot(""); }}
-                options={devices.map((d) => ({
+                options={ownDevices.map((d) => ({
                   value: d.id, label: d.name,
                   hint: d.status !== "online" ? "offline" : "online",
                 }))} />
