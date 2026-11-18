@@ -21,6 +21,17 @@ DEFAULT_IGNORES: frozenset[str] = frozenset({
     "dist", "build", ".turbo", ".cache", ".netsync-partial",
 })
 
+
+def ignored_file_name(name: str) -> bool:
+    """File names that are editor locks or partial transfers — never indexed
+    or synced. Office writes `~$`/`~WRL` scratch locks while a document is
+    open; browsers leave .crdownload/.part while downloading."""
+    if name.startswith(("~$", "~WRL", "~", ".~lock.")) and (
+        name.startswith(("~$", "~WRL", ".~lock.")) or name.endswith(".tmp")
+    ):
+        return True
+    return name.endswith((".crdownload", ".part", ".partial"))
+
 CHUNK = 1024 * 1024
 HASH_MAX_SIZE = 200 * 1024 * 1024  # skip hashing files >200MB at index time
 
@@ -115,7 +126,7 @@ def index_folder(
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in ignores]
         for fname in filenames:
-            if fname in ignores:
+            if fname in ignores or ignored_file_name(fname):
                 stats.skipped += 1
                 continue
             if progress is not None:

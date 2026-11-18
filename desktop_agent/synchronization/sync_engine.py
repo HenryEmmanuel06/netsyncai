@@ -30,7 +30,7 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from file_operations.ops import PARTIAL_DIR, OpDenied
-from indexing.indexer import DEFAULT_IGNORES, sha256_file
+from indexing.indexer import DEFAULT_IGNORES, ignored_file_name, sha256_file
 from protocol import (
     Envelope,
     MessageType,
@@ -207,6 +207,8 @@ class SyncEngine:
                             if r2:
                                 put(r2, "dir", Path(dp) / dd, None, 1)
                         for fn in fns:
+                            if fn in DEFAULT_IGNORES or ignored_file_name(fn):
+                                continue
                             fp = Path(dp) / fn
                             r2 = self._rel(rt, fp)
                             if r2:
@@ -280,7 +282,7 @@ class SyncEngine:
                 if rel is not None:
                     dirs.append(rel)
             for fname in filenames:
-                if fname in DEFAULT_IGNORES:
+                if fname in DEFAULT_IGNORES or ignored_file_name(fname):
                     continue
                 full = Path(dirpath) / fname
                 rel = self._rel(rt, full)
@@ -634,7 +636,8 @@ class SyncEngine:
 
     def _ignored(self, rel: str) -> bool:
         parts = Path(rel).parts
-        return any(p in DEFAULT_IGNORES for p in parts)
+        return any(p in DEFAULT_IGNORES for p in parts) or (
+            parts and ignored_file_name(parts[-1]))
 
     def _suppressed(self, rt: SyncRuntime, rel: str) -> bool:
         until = rt.suppress.get(rel, 0)
