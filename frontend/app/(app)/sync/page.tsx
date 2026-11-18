@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeftRight, Check, Eye, Mail, Monitor, Pause, Play, Plus, RefreshCw,
-  Square, Users, Zap,
+  ArrowLeftRight, Check, ChevronDown, Eye, Mail, Monitor, Pause, Play,
+  Plus, RefreshCw, Square, Users, Zap,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -197,16 +197,16 @@ function InlinePick({ value, placeholder, options, onPick, className = "w-48" }:
   const [open, setOpen] = useState(false);
   const cur = options.find((o) => o.value === value);
   return (
-    <div className={className}>
+    <div className={`relative ${className}`}>
       <button type="button" onClick={() => setOpen((o) => !o)}
         className="input flex w-full items-center gap-2 !py-1.5 text-left text-xs">
         <span className={`min-w-0 flex-1 truncate ${cur ? "" : "text-[var(--color-text-faint)]"}`}>
           {cur?.label ?? placeholder}
         </span>
-        <span className={`text-[10px] text-[var(--color-text-faint)] transition-transform ${open ? "rotate-180" : ""}`}>▼</span>
+        <ChevronDown size={13} className={`shrink-0 text-[var(--color-text-dim)] transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+        <div className="absolute bottom-full left-0 z-20 mb-1 max-h-48 min-w-full overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-[0_16px_40px_-8px_rgba(0,0,0,0.7)]">
           {options.length === 0 ? (
             <div className="px-3 py-2.5 text-[11px] text-[var(--color-warn)]">
               No computers found on this account
