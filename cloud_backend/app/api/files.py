@@ -321,11 +321,37 @@ async def download(
     return await _download_response(queue, dispatch_task, transfer_id)
 
 
+async def _next_envelope(queue, dispatch_task) -> Envelope:
+    """Next transfer envelope — but a dispatch that already failed wins.
+
+    A failed download_file op (denied path, missing file, dead agent) puts
+    nothing in the queue; without this the request would hang for the whole
+    transfer timeout while the browser shows 0 bytes.
+    """
+    import asyncio
+    get_task = asyncio.ensure_future(queue.get())
+    done, pending = await asyncio.wait(
+        {get_task, dispatch_task}, timeout=TRANSFER_TIMEOUT,
+        return_when=asyncio.FIRST_COMPLETED)
+    if not done:
+        get_task.cancel()
+        raise CommandTimeout("transfer timed out")
+    if dispatch_task in done:
+        dispatch_task.result()          # surfaces the real error
+        if not get_task.done():          # op ended without streaming
+            get_task.cancel()
+            raise CommandFailed("agent ended the transfer early")
+        return get_task.result()
+    return get_task.result()
+
+
 async def _download_response(queue, dispatch_task, transfer_id):
     """Wait for TRANSFER_BEGIN so we can set filename/size headers."""
-    import asyncio
-    # zip creation on folders can take a while before BEGIN arrives
-    first: Envelope = await asyncio.wait_for(queue.get(), timeout=TRANSFER_TIMEOUT)
+    try:
+        first = await _next_envelope(queue, dispatch_task)
+    except (CommandFailed, CommandTimeout):
+        transfers.unregister(transfer_id)
+        raise
     if first.type is not MessageType.TRANSFER_BEGIN:
         transfers.unregister(transfer_id)
         raise CommandFailed("agent did not begin transfer")
@@ -335,7 +361,7 @@ async def _download_response(queue, dispatch_task, transfer_id):
     async def body():
         try:
             while True:
-                env = await asyncio.wait_for(queue.get(), timeout=TRANSFER_TIMEOUT)
+                env = await _next_envelope(queue, dispatch_task)
                 if env.type is MessageType.TRANSFER_CHUNK:
                     data = transfers.decode_chunk(env)
                     hasher.update(data)
