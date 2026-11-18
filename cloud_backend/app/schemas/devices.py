@@ -22,6 +22,7 @@ class DeviceResponse(BaseModel):
     name: str
     platform: str
     agent_version: str | None = None
+    machine_id: str | None = None   # stable PC fingerprint — survives re-pairing
     status: DeviceStatusLiteral = "offline"
     last_seen_at: datetime | None = None
     revoked_at: datetime | None = None

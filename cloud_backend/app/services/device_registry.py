@@ -62,12 +62,14 @@ class DeviceStore(Protocol):
         self, owner_id: str, device_name: str, ttl_seconds: int
     ) -> tuple[str, datetime]: ...
     async def redeem_pairing(
-        self, code: str, agent_version: str | None
+        self, code: str, agent_version: str | None,
+        machine_id: str | None = None,
     ) -> tuple[DeviceResponse, str]: ...
     async def verify_device_credential(self, device_id: str, credential: str) -> bool: ...
     async def agent_connected(
         self, device_id: str, status: str, agent_version: str | None,
         lan_address: str | None, lan_port: int | None,
+        machine_id: str | None = None,
     ) -> None: ...
     async def agent_disconnected(self, device_id: str) -> None: ...
 
@@ -307,12 +309,25 @@ class InMemoryDeviceStore:
         pass  # in-memory store has no FK constraints
 
     async def redeem_pairing(
-        self, code: str, agent_version: str | None
+        self, code: str, agent_version: str | None,
+        machine_id: str | None = None,
     ) -> tuple[DeviceResponse, str]:
         record = self._valid_pairing(code)
         record["used"] = True
 
         credential = new_device_credential()
+        if machine_id:
+            # same physical PC re-pairing — resume its device record: rotate
+            # the credential, apply the (possibly renamed) device name, and
+            # keep the device_id so shares/sessions pick up where they left
+            for d in self._devices.values():
+                if (d.get("machine_id") == machine_id
+                        and d["owner_id"] == record["owner_id"]
+                        and not d.get("revoked_at")):
+                    d["credential_hash"] = _hash_secret(credential)
+                    d["name"] = record["device_name"]
+                    d["agent_version"] = agent_version
+                    return DeviceResponse(**d), credential
         device_id = str(uuid.uuid4())
         self._devices[device_id] = {
             "id": device_id,
@@ -320,6 +335,7 @@ class InMemoryDeviceStore:
             "name": record["device_name"],
             "platform": "windows",
             "agent_version": agent_version,
+            "machine_id": machine_id,
             "status": "offline",
             "last_seen_at": None,
             "revoked_at": None,
@@ -339,12 +355,15 @@ class InMemoryDeviceStore:
     async def agent_connected(
         self, device_id: str, status: str, agent_version: str | None,
         lan_address: str | None, lan_port: int | None,
+        machine_id: str | None = None,
     ) -> None:
         d = self._devices[device_id]
         d["status"] = status
         d["last_seen_at"] = _now()
         if agent_version:
             d["agent_version"] = agent_version
+        if machine_id and not d.get("machine_id"):
+            d["machine_id"] = machine_id  # backfill for pre-fingerprint devices
         self._sessions[device_id] = {
             "connected_at": _now(),
             "last_heartbeat_at": _now(),

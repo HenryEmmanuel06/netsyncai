@@ -17,6 +17,7 @@ import queue
 import shutil
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
@@ -130,7 +131,15 @@ class AgentApp:
 
         setup_file_logging(self.data_dir)
         self.ipc = InstanceServer(lambda m: self.post(lambda: self.handle_message(m)))
-        if not self.ipc.try_acquire():
+        # the just-updated copy can race a still-dying predecessor for the
+        # port — retry briefly before deciding another instance owns it
+        acquired = False
+        for _ in range(20):
+            if self.ipc.try_acquire():
+                acquired = True
+                break
+            time.sleep(0.25)
+        if not acquired:
             send_to_running(self.initial_message or "show")
             return 0
 
@@ -240,9 +249,11 @@ class AgentApp:
 
         async def runner():
             conn = connect(data_dir)  # sqlite: one connection per thread
+            from desktop.machine_id import machine_id
             try:
                 await run_forever(coordinator, s["device_id"], s["device_credential"],
-                                  AGENT_VERSION, conn=conn, on_status=on_status)
+                                  AGENT_VERSION, conn=conn, on_status=on_status,
+                                  machine_id=machine_id(conn))
             except CredentialRejected:
                 pass  # already reported through on_status
             finally:
@@ -338,7 +349,8 @@ class AgentApp:
             try:
                 preview = fetch_pairing_preview(coordinator, code)
                 self.post(lambda: self._confirm_pairing(coordinator, code, preview))
-            except (PairingFailed, httpx.HTTPError) as exc:
+            except Exception as exc:  # never leak pairing_busy — a stuck flag
+                # silently ignores every later Connect click
                 msg = str(exc) if isinstance(exc, PairingFailed) else \
                     "Can't reach NetSync AI. Check your internet connection."
                 def fail():
@@ -362,16 +374,20 @@ class AgentApp:
 
         def confirm():
             win.busy()
+            from desktop.machine_id import machine_id
+            mid = machine_id(self.conn)  # main thread — sqlite isn't shared
 
             def work():
                 try:
-                    result = asyncio.run(redeem_pairing(coordinator, code, AGENT_VERSION))
+                    result = asyncio.run(redeem_pairing(
+                        coordinator, code, AGENT_VERSION, machine_id=mid))
                     self.post(lambda: self._paired_ok(coordinator, result))
-                except (PairingFailed, httpx.HTTPError) as exc:
+                except Exception as exc:  # network errors, bad bodies, anything
                     def fail():
                         self.pairing_busy = False
+                        msg = str(exc) or "pairing failed — try again"
                         try:
-                            win.set_status(str(exc) or "pairing failed", error=True)
+                            win.set_status(msg, error=True)
                             win.connect_btn.configure(state="normal", text="Connect")
                         except tk.TclError:
                             pass

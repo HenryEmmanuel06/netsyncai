@@ -63,6 +63,7 @@ class AgentHello(BaseModel):
     status: DeviceStatus = DeviceStatus.ONLINE
     lan_address: str | None = None
     lan_port: int | None = None
+    machine_id: str | None = None  # stable PC fingerprint — survives re-pairing
 
 
 class PresenceUpdate(BaseModel):

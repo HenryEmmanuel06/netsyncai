@@ -145,7 +145,8 @@ class SupabaseDeviceStore:
         return code, expires
 
     async def redeem_pairing(
-        self, code: str, agent_version: str | None
+        self, code: str, agent_version: str | None,
+        machine_id: str | None = None,
     ) -> tuple[DeviceResponse, str]:
         r = await self._client.get(
             "/device_pairing_requests",
@@ -172,6 +173,26 @@ class SupabaseDeviceStore:
             raise PairingError("pairing code already used")
 
         credential = secrets.token_urlsafe(32)
+        if machine_id:
+            # same physical PC re-pairing — resume its device record: rotate
+            # the credential and apply the (possibly renamed) device name,
+            # keeping the device_id so shares/sessions survive the reinstall
+            r = await self._client.get(
+                "/devices",
+                params={"owner_id": f"eq.{rec['owner_id']}",
+                        "machine_id": f"eq.{machine_id}",
+                        "revoked_at": "is.null"},
+            )
+            r.raise_for_status()
+            for dev in r.json():
+                r = await self._client.patch(
+                    "/devices", params={"id": f"eq.{dev['id']}"},
+                    json={"credential_hash": _hash(credential),
+                          "name": rec["device_name"],
+                          "agent_version": agent_version},
+                )
+                r.raise_for_status()
+                return DeviceResponse(**r.json()[0]), credential
         r = await self._client.post(
             "/devices",
             json={
@@ -179,6 +200,7 @@ class SupabaseDeviceStore:
                 "name": rec["device_name"],
                 "platform": "windows",
                 "agent_version": agent_version,
+                "machine_id": machine_id,
                 "credential_hash": _hash(credential),
             },
         )
@@ -299,6 +321,7 @@ class SupabaseDeviceStore:
     async def agent_connected(
         self, device_id: str, status: str, agent_version: str | None,
         lan_address: str | None, lan_port: int | None,
+        machine_id: str | None = None,
     ) -> None:
         r = await self._client.post(
             "/device_sessions",
@@ -318,6 +341,14 @@ class SupabaseDeviceStore:
             "/devices", params={"id": f"eq.{device_id}"}, json=body,
         )
         r.raise_for_status()
+        if machine_id:
+            # backfill only when unset — a valid credential must not let one
+            # machine steal another device's fingerprint
+            await self._client.patch(
+                "/devices",
+                params={"id": f"eq.{device_id}", "machine_id": "is.null"},
+                json={"machine_id": machine_id},
+            )
 
     async def agent_disconnected(self, device_id: str) -> None:
         # close the most recent open session

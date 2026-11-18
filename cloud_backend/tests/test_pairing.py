@@ -54,6 +54,65 @@ async def test_redeem_code_is_single_use(client, auth_headers):
     assert r2.status_code == 401
 
 
+async def test_repairing_same_machine_resumes_device(client, auth_headers):
+    # a PC reinstalling/re-pairing must resume its device record — the
+    # device_id (and all shares/sessions keyed to it) survives; the new
+    # pairing code's name applies as a plain rename
+    first = await _create_code(client, auth_headers, "mezie")
+    r1 = await client.post(
+        "/api/v1/pairing/redeem",
+        json={"code": first["code"], "machine_id": "pc-abc-123"},
+    )
+    assert r1.status_code == 200, r1.text
+    d1 = r1.json()
+
+    second = await _create_code(client, auth_headers, "de mezie")
+    r2 = await client.post(
+        "/api/v1/pairing/redeem",
+        json={"code": second["code"], "machine_id": "pc-abc-123",
+              "agent_version": "0.4.7"},
+    )
+    assert r2.status_code == 200, r2.text
+    d2 = r2.json()
+    assert d2["device_id"] == d1["device_id"]      # same device, not a duplicate
+    assert d2["device_name"] == "de mezie"         # rename applied
+    assert d2["device_credential"] != d1["device_credential"]  # rotated
+
+    # no duplicate device was minted
+    r = await client.get("/api/v1/devices", headers=auth_headers)
+    names = [d["name"] for d in r.json()]
+    assert names == ["de mezie"]
+
+    # the old credential no longer authenticates — rotation is real
+    from app.api.deps import get_device_store
+    store = get_device_store()
+    assert not await store.verify_device_credential(
+        d1["device_id"], d1["device_credential"])
+    assert await store.verify_device_credential(
+        d2["device_id"], d2["device_credential"])
+
+
+async def test_machine_id_does_not_cross_owner(
+    client, auth_headers, other_auth_headers
+):
+    # a second user re-pairing a PC only ever claims THEIR OWN device with
+    # that fingerprint — never the first owner's
+    body = await _create_code(client, auth_headers, "mezie")
+    r1 = await client.post(
+        "/api/v1/pairing/redeem",
+        json={"code": body["code"], "machine_id": "shared-pc"},
+    )
+    assert r1.status_code == 200
+
+    body2 = await _create_code(client, other_auth_headers, "second-owner-pc")
+    r2 = await client.post(
+        "/api/v1/pairing/redeem",
+        json={"code": body2["code"], "machine_id": "shared-pc"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["device_id"] != r1.json()["device_id"]
+
+
 async def test_expired_code_rejected(client, auth_headers):
     from app.api.deps import get_device_store
 

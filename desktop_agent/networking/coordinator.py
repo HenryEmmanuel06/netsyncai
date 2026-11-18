@@ -47,17 +47,24 @@ def ws_url_for(coordinator_url: str) -> str:
 
 
 async def redeem_pairing(
-    coordinator_url: str, code: str, agent_version: str
+    coordinator_url: str, code: str, agent_version: str,
+    machine_id: str = "",
 ) -> dict:
     """Exchange a pairing code for a device_id + scoped credential."""
     async with httpx.AsyncClient(timeout=15.0) as client:
         r = await client.post(
             f"{coordinator_url.rstrip('/')}/api/v1/pairing/redeem",
-            json={"code": code.strip().upper(), "agent_version": agent_version},
+            json={"code": code.strip().upper(), "agent_version": agent_version,
+                  "machine_id": machine_id},
         )
     if r.status_code != 200:
-        detail = r.json().get("detail", {})
-        raise PairingFailed(detail.get("error", f"pairing failed: {r.status_code}"))
+        try:
+            detail = r.json().get("detail", {})
+            msg = detail.get("error", f"pairing failed: {r.status_code}") \
+                if isinstance(detail, dict) else str(detail)
+        except Exception:
+            msg = f"pairing failed: {r.status_code}"
+        raise PairingFailed(msg)
     return r.json()
 
 
@@ -171,6 +178,7 @@ async def run_session(
     status: DeviceStatus = DeviceStatus.ONLINE,
     conn=None,
     on_status=None,
+    machine_id: str = "",
 ) -> None:
     """One connection attempt: hello → message loop. Raises on failure;
     the caller (run_forever) owns retry/backoff policy."""
@@ -184,6 +192,7 @@ async def run_session(
                 device_credential=credential,
                 agent_version=agent_version,
                 status=status,
+                machine_id=machine_id or None,
             ).model_dump(),
         )
         await ws.send(hello.model_dump_json())
@@ -238,6 +247,7 @@ async def run_forever(
     agent_version: str,
     conn=None,
     on_status=None,
+    machine_id: str = "",
 ) -> None:
     """Reconnecting outer loop — the agent's main resident coroutine.
     Raises CredentialRejected when the device must be re-paired."""
@@ -246,7 +256,7 @@ async def run_forever(
         try:
             await run_session(
                 coordinator_url, device_id, credential, agent_version,
-                conn=conn, on_status=on_status,
+                conn=conn, on_status=on_status, machine_id=machine_id,
             )
         except (asyncio.CancelledError, CredentialRejected) as exc:
             if isinstance(exc, CredentialRejected):

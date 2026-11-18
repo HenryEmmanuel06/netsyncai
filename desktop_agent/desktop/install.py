@@ -156,6 +156,14 @@ def self_install(argv: list[str]) -> bool:
     else:
         raise RuntimeError(f"could not write {target} â€” close NetSync AI and retry")
 
+    # wait for the old process to release the single-instance port before
+    # relaunching — otherwise the new copy fails to acquire it and exits,
+    # leaving NOTHING running (device stays offline until a manual launch)
+    for _ in range(40):
+        if not send_to_running("quit"):
+            break                  # port released — old instance is gone
+        time.sleep(0.25)
+
     register(target)
     subprocess.Popen([str(target), *argv], close_fds=True, **_hidden())
     log.info("installed to %s", target)

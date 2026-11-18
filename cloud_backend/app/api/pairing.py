@@ -61,7 +61,9 @@ async def redeem_pairing(
     store: DeviceStore = Depends(get_device_store),
 ) -> PairingRedeemResponse:
     try:
-        device, credential = await store.redeem_pairing(req.code, req.agent_version)
+        device, credential = await store.redeem_pairing(
+            req.code, req.agent_version, machine_id=req.machine_id
+        )
     except PairingError as exc:
         raise http_401(str(exc)) from exc
     await log_activity(store, device.owner_id, "device.paired",

@@ -113,7 +113,7 @@ async def agent_socket(
 
         await store.agent_connected(
             device.id, hello.status.value, hello.agent_version,
-            hello.lan_address, hello.lan_port,
+            hello.lan_address, hello.lan_port, machine_id=hello.machine_id,
         )
         manager.register(device.id, ws)
         await ws.send_text(_env(MessageType.PONG, {"session": "ready"}))

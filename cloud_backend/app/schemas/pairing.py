@@ -26,6 +26,9 @@ class PairingPreviewResponse(BaseModel):
 class PairingRedeemRequest(BaseModel):
     code: str = Field(min_length=4, max_length=16)
     agent_version: str | None = Field(default=None, max_length=32)
+    # stable PC fingerprint — re-pairing the same machine reuses its
+    # existing device record instead of minting an offline duplicate
+    machine_id: str | None = Field(default=None, max_length=64)
 
 
 class PairingRedeemResponse(BaseModel):

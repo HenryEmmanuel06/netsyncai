@@ -85,9 +85,11 @@ def cmd_pair(args: argparse.Namespace) -> int:
     if get_setting(conn, "device_id") and not args.force:
         print("already paired (use --force to re-pair)", file=sys.stderr)
         return 2
+    from desktop.machine_id import machine_id
     try:
         result = asyncio.run(
-            redeem_pairing(args.coordinator, args.code, AGENT_VERSION)
+            redeem_pairing(args.coordinator, args.code, AGENT_VERSION,
+                           machine_id=machine_id(conn))
         )
     except PairingFailed as exc:
         print(f"pairing failed: {exc}", file=sys.stderr)
@@ -116,9 +118,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("no coordinator URL — pass --coordinator", file=sys.stderr)
         return 2
     log.info("starting agent: device=%s coordinator=%s", device_id, coordinator)
+    from desktop.machine_id import machine_id
     try:
         asyncio.run(
-            run_forever(coordinator, device_id, credential, AGENT_VERSION, conn=conn)
+            run_forever(coordinator, device_id, credential, AGENT_VERSION,
+                        conn=conn, machine_id=machine_id(conn))
         )
     except CredentialRejected as exc:
         print(f"this device is no longer accepted ({exc}) — pair again with "
