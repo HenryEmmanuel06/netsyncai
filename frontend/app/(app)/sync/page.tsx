@@ -8,7 +8,8 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, Dropdown, EmptyState, Field, FolderArt, Modal, PageHeader, Spinner,
+  ConfirmDialog, Dropdown, EmptyState, Field, FolderArt, Modal, PageHeader,
+  Spinner, StatusDot,
 } from "@/components/ui";
 import { basename, formatBytes } from "@/lib/format";
 import type { Device, SharedFolder, SharedFolderInfo, SyncSession } from "@/types";
@@ -219,6 +220,12 @@ function RequestCard({ r, devices, token, onRespond }: {
   }, [dev, token]);
 
   const src = basename(r.name.split("↔")[0]?.trim() || r.name);
+  const devOptions = ownDevices.map((d) => ({
+    value: d.id, label: d.name,
+    hint: d.status !== "online" ? "offline" : "online",
+    group: "My computers",
+    icon: <span className="flex w-4 justify-center"><StatusDot status={d.status} /></span>,
+  }));
 
   return (
     <div className="pop-in relative mb-4 overflow-hidden rounded-2xl bg-gradient-to-r from-[rgba(139,92,246,0.55)] via-[rgba(192,107,255,0.35)] to-[rgba(255,154,61,0.45)] p-px">
@@ -267,10 +274,7 @@ function RequestCard({ r, devices, token, onRespond }: {
               <Dropdown className="w-48 text-xs" value={dev}
                 placeholder="Your computer…"
                 onChange={(v) => { setDev(v); setRoot(""); }}
-                options={ownDevices.map((d) => ({
-                  value: d.id, label: d.name,
-                  hint: d.status !== "online" ? "offline" : "online",
-                }))} />
+                options={devOptions} />
               {ownDevices.length === 0 && (
                 <span className="text-[11px] text-[var(--color-warn)]">
                   No computers on this account — check the Devices page
@@ -539,6 +543,8 @@ export default function SyncPage() {
                   options={devices.map((d) => ({
                     value: d.id, label: d.name,
                     hint: d.status !== "online" ? "offline" : "online",
+                    group: "My computers",
+                    icon: <span className="flex w-4 justify-center"><StatusDot status={d.status} /></span>,
                   }))} />
               </Field>
               <div>
@@ -599,6 +605,8 @@ export default function SyncPage() {
                       options={devices.filter((d) => d.id !== aDevice).map((d) => ({
                         value: d.id, label: d.name,
                         hint: d.status !== "online" ? "offline" : "online",
+                        group: "My computers",
+                        icon: <span className="flex w-4 justify-center"><StatusDot status={d.status} /></span>,
                       }))} />
                   </Field>
                   <div>
