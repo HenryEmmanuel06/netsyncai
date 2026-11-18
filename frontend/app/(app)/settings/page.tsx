@@ -151,6 +151,11 @@ export default function SettingsPage() {
                   <Download size={14} /> {dl.label}
                 </a>
               )}
+              {dl.note && (
+                <div className="mt-2 whitespace-pre-line rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 text-[11px] leading-relaxed text-[var(--color-text-dim)]">
+                  {dl.note}
+                </div>
+              )}
               <ul className="mt-4 space-y-2 text-xs text-[var(--color-text-dim)]">
                 <li>• {isMac() ? "Run it once — it stays connected while it's running" : "Starts automatically when you sign in"}</li>
                 <li>• Pair from Devices → Add this computer — no commands needed</li>

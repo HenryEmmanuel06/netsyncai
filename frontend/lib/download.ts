@@ -35,13 +35,16 @@ function repoFrom(url: string): string | null {
 
 /** Resolved download URL for this visitor's OS.
  *
- * Probes the latest release's asset list first — if the OS binary isn't on
- * the release yet (e.g. a not-yet-built macOS asset) the button lands on the
- * release page itself instead of a GitHub 404.
+ * Probes the latest release's asset list first. If the OS binary isn't on
+ * the release yet (e.g. a not-yet-built macOS asset), the button downloads
+ * the source bundle of that release instead of landing on a 404 or a bare
+ * release page — `python3 main.py` runs it, no build step needed.
  */
-export function useAgentDownload(): { url: string; label: string } {
+export function useAgentDownload(): { url: string; label: string; note?: string } {
   const fallback = agentDownload();
-  const [url, setUrl] = useState(fallback.url);
+  const [resolved, setResolved] = useState<{ url: string; note?: string }>({
+    url: fallback.url,
+  });
   useEffect(() => {
     const repo = repoFrom(WIN_URL);
     if (!repo) return;
@@ -54,11 +57,23 @@ export function useAgentDownload(): { url: string; label: string } {
         const assets: { name?: string; browser_download_url?: string }[] =
           rel.assets ?? [];
         const hit = assets.find((a) => a.name === want);
-        setUrl(hit?.browser_download_url ?? rel.html_url ?? fallback.url);
+        if (hit?.browser_download_url) {
+          setResolved({ url: hit.browser_download_url });
+        } else if (isMac() && rel.tag_name) {
+          setResolved({
+            url: `https://github.com/${repo}/archive/refs/tags/${rel.tag_name}.zip`,
+            note: "No packaged macOS app yet — this downloads the source. " +
+                  "Unzip it, open Terminal inside the folder, then run:\n" +
+                  "cd desktop_agent && pip install -r requirements.txt\n" +
+                  "python3 main.py pair <your-code>   then   python3 main.py run",
+          });
+        } else {
+          setResolved({ url: rel.html_url ?? fallback.url });
+        }
       })
       .catch(() => {});
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  return { url, label: fallback.label };
+  return { url: resolved.url, label: fallback.label, note: resolved.note };
 }

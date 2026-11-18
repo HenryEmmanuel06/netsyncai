@@ -72,10 +72,17 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
   return (
     <Modal title="Connect a computer" onClose={onClose}>
       {AGENT_DOWNLOAD_URL ? (
-        <a href={dl.url}
-          className="btn btn-ghost mb-4 w-full justify-center">
-          <Download size={15} /> {dl.label}
-        </a>
+        <>
+          <a href={dl.url}
+            className="btn btn-ghost mb-4 w-full justify-center">
+            <Download size={15} /> {dl.label}
+          </a>
+          {dl.note && (
+            <div className="mb-4 -mt-2 whitespace-pre-line rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 text-[11px] leading-relaxed text-[var(--color-text-dim)]">
+              {dl.note}
+            </div>
+          )}
+        </>
       ) : (
         <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-dim)]">
           1. Download the NetSync AI app on the computer you want to add,
