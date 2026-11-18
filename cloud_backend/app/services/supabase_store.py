@@ -10,6 +10,7 @@ Pairing codes and device credentials are stored only as SHA-256 hashes.
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,9 @@ def _now() -> datetime:
 
 def _hash(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
+
+
+log = logging.getLogger("netsync.store")
 
 
 def _new_code() -> str:
@@ -183,27 +187,31 @@ class SupabaseDeviceStore:
                         "machine_id": f"eq.{machine_id}",
                         "revoked_at": "is.null"},
             )
-            r.raise_for_status()
-            for dev in r.json():
-                r = await self._client.patch(
-                    "/devices", params={"id": f"eq.{dev['id']}"},
-                    json={"credential_hash": _hash(credential),
-                          "name": rec["device_name"],
-                          "agent_version": agent_version},
-                )
+            # 400 = the machine_id migration isn't applied yet — pairing must
+            # still work, just without device resume
+            if r.status_code != 400:
                 r.raise_for_status()
-                return DeviceResponse(**r.json()[0]), credential
-        r = await self._client.post(
-            "/devices",
-            json={
-                "owner_id": rec["owner_id"],
-                "name": rec["device_name"],
-                "platform": "windows",
-                "agent_version": agent_version,
-                "machine_id": machine_id,
-                "credential_hash": _hash(credential),
-            },
-        )
+                for dev in r.json():
+                    r = await self._client.patch(
+                        "/devices", params={"id": f"eq.{dev['id']}"},
+                        json={"credential_hash": _hash(credential),
+                              "name": rec["device_name"],
+                              "agent_version": agent_version},
+                    )
+                    r.raise_for_status()
+                    return DeviceResponse(**r.json()[0]), credential
+        body = {
+            "owner_id": rec["owner_id"],
+            "name": rec["device_name"],
+            "platform": "windows",
+            "agent_version": agent_version,
+            "machine_id": machine_id,
+            "credential_hash": _hash(credential),
+        }
+        r = await self._client.post("/devices", json=body)
+        if r.status_code == 400 and machine_id:
+            body.pop("machine_id")  # migration not applied — pair anyway
+            r = await self._client.post("/devices", json=body)
         r.raise_for_status()
         return DeviceResponse(**r.json()[0]), credential
 
@@ -323,17 +331,8 @@ class SupabaseDeviceStore:
         lan_address: str | None, lan_port: int | None,
         machine_id: str | None = None,
     ) -> None:
-        r = await self._client.post(
-            "/device_sessions",
-            json={
-                "device_id": device_id,
-                "agent_version": agent_version,
-                "lan_address": lan_address,
-                "lan_port": lan_port,
-                "last_heartbeat_at": _now().isoformat(),
-            },
-        )
-        r.raise_for_status()
+        # status first — presence on the dashboard must not depend on the
+        # session-history write succeeding
         body: dict = {"status": status, "last_seen_at": _now().isoformat()}
         if agent_version:
             body["agent_version"] = agent_version
@@ -341,9 +340,23 @@ class SupabaseDeviceStore:
             "/devices", params={"id": f"eq.{device_id}"}, json=body,
         )
         r.raise_for_status()
+        try:
+            await self._client.post(
+                "/device_sessions",
+                json={
+                    "device_id": device_id,
+                    "agent_version": agent_version,
+                    "lan_address": lan_address,
+                    "lan_port": lan_port,
+                    "last_heartbeat_at": _now().isoformat(),
+                },
+            )
+        except Exception:
+            log.warning("session row write failed for %s", device_id)
         if machine_id:
             # backfill only when unset — a valid credential must not let one
-            # machine steal another device's fingerprint
+            # machine steal another device's fingerprint (a 400 here just
+            # means the migration isn't applied — harmless)
             await self._client.patch(
                 "/devices",
                 params={"id": f"eq.{device_id}", "machine_id": "is.null"},
