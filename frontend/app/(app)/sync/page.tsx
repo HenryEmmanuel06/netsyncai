@@ -271,6 +271,11 @@ function RequestCard({ r, devices, token, onRespond }: {
                   value: d.id, label: d.name,
                   hint: d.status !== "online" ? "offline" : "online",
                 }))} />
+              {ownDevices.length === 0 && (
+                <span className="text-[11px] text-[var(--color-warn)]">
+                  No computers on this account — check the Devices page
+                </span>
+              )}
               {dev && (
                 <div className="flex overflow-hidden rounded-lg border border-[var(--color-border)] text-xs">
                   <button
