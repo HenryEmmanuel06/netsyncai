@@ -13,7 +13,7 @@ import {
 import { basename, formatBytes, formatDate, timeAgo } from "@/lib/format";
 import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
 
-import { agentDownload } from "@/lib/download";
+import { useAgentDownload } from "@/lib/download";
 
 const AGENT_DOWNLOAD_URL = process.env.NEXT_PUBLIC_AGENT_DOWNLOAD_URL ?? "";
 
@@ -53,6 +53,7 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dl = useAgentDownload();
 
   async function create() {
     if (!name.trim()) return;
@@ -71,9 +72,9 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
   return (
     <Modal title="Connect a computer" onClose={onClose}>
       {AGENT_DOWNLOAD_URL ? (
-        <a href={agentDownload().url}
+        <a href={dl.url}
           className="btn btn-ghost mb-4 w-full justify-center">
-          <Download size={15} /> {agentDownload().label}
+          <Download size={15} /> {dl.label}
         </a>
       ) : (
         <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-dim)]">

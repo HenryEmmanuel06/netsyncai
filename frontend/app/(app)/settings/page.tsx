@@ -18,7 +18,7 @@ const SECTIONS = [
   { key: "about", label: "About", icon: Info },
 ];
 
-import { agentDownload, isMac } from "@/lib/download";
+import { isMac, useAgentDownload } from "@/lib/download";
 
 const AGENT_DOWNLOAD_URL = process.env.NEXT_PUBLIC_AGENT_DOWNLOAD_URL ?? "";
 
@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dl = useAgentDownload();
 
   useEffect(() => {
     if (!token) return;
@@ -146,8 +147,8 @@ export default function SettingsPage() {
                 {" "}and handles file transfers and sync for folders you share.
               </p>
               {AGENT_DOWNLOAD_URL && (
-                <a href={agentDownload().url} className="btn btn-primary mt-4">
-                  <Download size={14} /> {agentDownload().label}
+                <a href={dl.url} className="btn btn-primary mt-4">
+                  <Download size={14} /> {dl.label}
                 </a>
               )}
               <ul className="mt-4 space-y-2 text-xs text-[var(--color-text-dim)]">
