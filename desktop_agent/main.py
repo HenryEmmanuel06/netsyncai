@@ -98,6 +98,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
     set_setting(conn, "device_credential", result["device_credential"])
     set_setting(conn, "device_name", result["device_name"])
     set_setting(conn, "coordinator_url", args.coordinator)
+    set_setting(conn, "owner_email", result.get("owner_email") or "")
     print(f"paired as {result['device_name']} ({result['device_id']})")
     return 0
 

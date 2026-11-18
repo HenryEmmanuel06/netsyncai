@@ -193,3 +193,6 @@ class InfoWindow:
         if action:
             label, cb = action
             _button(btns, label, lambda: (cb(), self.win.destroy())).pack(side="right", padx=8)
+
+    def close(self) -> None:
+        self.win.destroy()

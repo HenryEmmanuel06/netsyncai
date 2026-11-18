@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import (
     activity, ai, devices, files, folders, health, me, pairing, sharing, sync, ws_agent,
@@ -26,6 +27,16 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs" if settings.debug else None,
 )
+
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+    """Agents + the dashboard always get a JSON error body — a bare-text
+    500 breaks the desktop pairing UI (it can't parse the response)."""
+    logging.getLogger("netsync.api").exception("unhandled %s %s",
+                                             request.method, request.url.path)
+    return JSONResponse(status_code=500,
+                        content={"detail": {"error": "internal error"}})
+
 
 app.add_middleware(
     CORSMiddleware,

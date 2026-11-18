@@ -64,7 +64,7 @@ class DeviceStore(Protocol):
     async def redeem_pairing(
         self, code: str, agent_version: str | None,
         machine_id: str | None = None,
-    ) -> tuple[DeviceResponse, str]: ...
+    ) -> tuple[DeviceResponse, str, str | None]: ...
     async def verify_device_credential(self, device_id: str, credential: str) -> bool: ...
     async def agent_connected(
         self, device_id: str, status: str, agent_version: str | None,
@@ -311,11 +311,12 @@ class InMemoryDeviceStore:
     async def redeem_pairing(
         self, code: str, agent_version: str | None,
         machine_id: str | None = None,
-    ) -> tuple[DeviceResponse, str]:
+    ) -> tuple[DeviceResponse, str, str | None]:
         record = self._valid_pairing(code)
         record["used"] = True
 
         credential = new_device_credential()
+        owner_email = record.get("owner_email")
         if machine_id:
             # same physical PC re-pairing — resume its device record: rotate
             # the credential, apply the (possibly renamed) device name, and
@@ -327,7 +328,7 @@ class InMemoryDeviceStore:
                     d["credential_hash"] = _hash_secret(credential)
                     d["name"] = record["device_name"]
                     d["agent_version"] = agent_version
-                    return DeviceResponse(**d), credential
+                    return DeviceResponse(**d), credential, owner_email
         device_id = str(uuid.uuid4())
         self._devices[device_id] = {
             "id": device_id,
@@ -342,7 +343,7 @@ class InMemoryDeviceStore:
             "created_at": _now(),
             "credential_hash": _hash_secret(credential),
         }
-        return DeviceResponse(**self._devices[device_id]), credential
+        return DeviceResponse(**self._devices[device_id]), credential, owner_email
 
     async def verify_device_credential(self, device_id: str, credential: str) -> bool:
         d = self._devices.get(device_id)

@@ -35,3 +35,5 @@ class PairingRedeemResponse(BaseModel):
     device_id: str
     device_name: str
     device_credential: str   # shown once; agent stores it locally
+    owner_email: str | None = None  # shown in the tray/status so "connected
+                                  # to the wrong account" is never a mystery

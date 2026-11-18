@@ -151,10 +151,11 @@ class SupabaseDeviceStore:
     async def redeem_pairing(
         self, code: str, agent_version: str | None,
         machine_id: str | None = None,
-    ) -> tuple[DeviceResponse, str]:
+    ) -> tuple[DeviceResponse, str, str | None]:
         r = await self._client.get(
             "/device_pairing_requests",
-            params={"code_hash": f"eq.{_hash(code.strip().upper())}"},
+            params={"code_hash": f"eq.{_hash(code.strip().upper())}",
+                    "select": "*,profiles(email)"},
         )
         r.raise_for_status()
         rows = r.json()
@@ -177,6 +178,7 @@ class SupabaseDeviceStore:
             raise PairingError("pairing code already used")
 
         credential = secrets.token_urlsafe(32)
+        owner_email = (rec.get("profiles") or {}).get("email")
         if machine_id:
             # same physical PC re-pairing — resume its device record: rotate
             # the credential and apply the (possibly renamed) device name,
@@ -199,7 +201,7 @@ class SupabaseDeviceStore:
                               "agent_version": agent_version},
                     )
                     r.raise_for_status()
-                    return DeviceResponse(**r.json()[0]), credential
+                    return DeviceResponse(**r.json()[0]), credential, owner_email
         body = {
             "owner_id": rec["owner_id"],
             "name": rec["device_name"],
@@ -213,7 +215,7 @@ class SupabaseDeviceStore:
             body.pop("machine_id")  # migration not applied — pair anyway
             r = await self._client.post("/devices", json=body)
         r.raise_for_status()
-        return DeviceResponse(**r.json()[0]), credential
+        return DeviceResponse(**r.json()[0]), credential, owner_email
 
     async def preview_pairing(self, code: str) -> dict:
         r = await self._client.get(

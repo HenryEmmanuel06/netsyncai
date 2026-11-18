@@ -37,7 +37,8 @@ from networking.coordinator import (
 
 log = logging.getLogger("netsync.app")
 
-DEVICE_KEYS = ("device_id", "device_credential", "device_name", "coordinator_url")
+DEVICE_KEYS = ("device_id", "device_credential", "device_name", "coordinator_url",
+               "owner_email")
 
 
 def setup_file_logging(data_dir: Path) -> Path:
@@ -146,6 +147,7 @@ class AgentApp:
         log.info("NetSync AI %s starting (data: %s)", AGENT_VERSION, self.data_dir)
         self.conn = connect(self.data_dir)
         self.device_name = get_setting(self.conn, "device_name")
+        self.owner_email = get_setting(self.conn, "owner_email") or ""
         self.root = tk.Tk()
         self.root.withdraw()
         self._load_images()
@@ -211,6 +213,8 @@ class AgentApp:
     def status_line(self) -> str:
         # called from the tray thread — use the cached name, never sqlite
         if self.state == "online" and self.device_name:
+            if self.owner_email:
+                return f"Online as {self.device_name} ({self.owner_email})"
             return f"Online as {self.device_name}"
         return STATUS_TEXT.get(self.state, self.state)
 
@@ -323,9 +327,10 @@ class AgentApp:
         self.windows["status"] = InfoWindow(
             self.root, self.window_icon,
             f"NetSync AI — {STATUS_TEXT.get(self.state, self.state)}",
-            f"This computer is connected as “{self.device_name or '—'}” and "
-            "keeps running in the background (system tray icon). Manage shared "
-            "folders and people from the dashboard.",
+            f"This computer is connected as “{self.device_name or '—'}”"
+            + (f" on account {self.owner_email}" if self.owner_email else "")
+            + " and keeps running in the background (system tray icon). "
+            "Manage shared folders and people from the dashboard.",
             action=("Open dashboard", lambda: self.open_dashboard("")),
         )
 
@@ -411,7 +416,9 @@ class AgentApp:
         set_setting(self.conn, "device_credential", result["device_credential"])
         set_setting(self.conn, "device_name", result["device_name"])
         set_setting(self.conn, "coordinator_url", coordinator)
+        set_setting(self.conn, "owner_email", result.get("owner_email") or "")
         self.device_name = result["device_name"]
+        self.owner_email = result.get("owner_email") or ""
         log.info("paired as %s (%s)", result["device_name"], result["device_id"])
         self._close("confirm")
         self.start_agent()
