@@ -21,6 +21,7 @@ from app.orchestration.dispatcher import (
     DeviceOffline,
     dispatch,
 )
+from app.protocol import PERM_MANAGE_SHARING
 from app.schemas.sharing import (
     GrantRequest,
     GrantResponse,
@@ -87,6 +88,18 @@ async def _enforce_root_access(share: dict, permissions: int) -> None:
         )
 
 
+async def _grant_authority(share: dict, user_id: str, store) -> bool:
+    """Owner, or anyone holding PERM_MANAGE_SHARING on the shared root.
+
+    Managers can delegate — the share still belongs to the owner and the
+    grantee sees the folder under the owner's device."""
+    if share["owner_id"] == user_id:
+        return True
+    bits = await store.effective_permissions(
+        user_id, share["device_id"], share["root_path"])
+    return bool(bits & PERM_MANAGE_SHARING)
+
+
 @router.post("", response_model=SharedFolderResponse,
              status_code=status.HTTP_201_CREATED)
 async def create_share(
@@ -147,7 +160,11 @@ async def add_grant(
     if not share:
         raise http_404("share not found")
     if share["owner_id"] != auth.user_id:
-        raise http_403("only the folder owner can grant access")
+        if not await _grant_authority(share, auth.user_id, store):
+            raise http_403("only the folder owner or a manager can grant access")
+        # delegates can pass on at most what they can do themselves
+        if req.permissions & ~ROLE_BITS["editor"]:
+            raise http_403("managers can grant up to Editor access")
     subject = await store.resolve_user(req.subject)
     if subject is None:
         raise http_422(f"cannot resolve user '{req.subject}'")
@@ -173,7 +190,7 @@ async def list_grants(
     store: DeviceStore = Depends(get_device_store),
 ):
     share = await store.get_share(folder_id)
-    if not share or share["owner_id"] != auth.user_id:
+    if not share or not await _grant_authority(share, auth.user_id, store):
         raise http_404("share not found")
     return await store.list_grants(folder_id)
 
@@ -186,8 +203,11 @@ async def revoke_grant(
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
+    share = await store.get_share(folder_id)
+    if not share or not await _grant_authority(share, auth.user_id, store):
+        raise http_404("grant not found")
     try:
-        await store.revoke_grant(folder_id, grant_id, auth.user_id)
+        await store.revoke_grant(folder_id, grant_id, share["owner_id"])
     except DeviceNotFound:
         raise http_404("grant not found")
     await log_activity(store, auth.user_id, "grant.revoked", target=folder_id)

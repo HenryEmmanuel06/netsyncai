@@ -8,7 +8,8 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, Dropdown, EmptyState, Modal, PageHeader, PermBadges, Spinner,
+  ConfirmDialog, Dropdown, EmptyState, FolderArt, Modal, PageHeader,
+  PermBadges, Spinner,
 } from "@/components/ui";
 import { basename, initials, timeAgo } from "@/lib/format";
 import type { Device, GrantEntry, SharedFolder, SharedFolderInfo } from "@/types";
@@ -73,6 +74,7 @@ export default function PermissionsPage() {
   const [granted, setGranted] = useState<SharedFolder[]>([]);
   const [roots, setRoots] = useState<Record<string, SharedFolderInfo[] | null>>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [sharedSel, setSharedSel] = useState<SharedFolder | null>(null);
   const [grants, setGrants] = useState<GrantEntry[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [subject, setSubject] = useState("");
@@ -154,13 +156,17 @@ export default function PermissionsPage() {
 
   const selected = folders.find((f) => f.key === selectedKey) ?? null;
   const selectedReadOnly = selected?.access === "read";
-  const selectedShareId = selected?.share?.id;
+  // the share whose grants are being managed — own selection, or a
+  // shared-with-me folder where we hold Manager bits (delegated granting)
+  const sharedIsManager = !!(sharedSel?.permissions && sharedSel.permissions & 1024);
+  const activeShare = selected?.share ?? (sharedIsManager ? sharedSel : null);
+  const detailShareId = activeShare?.id;
 
   useEffect(() => {
-    if (!selectedShareId || !token) { setGrants([]); return; }
-    apiFetch<GrantEntry[]>(`/api/v1/sharing/${selectedShareId}/grants`, token)
+    if (!detailShareId || !token) { setGrants([]); return; }
+    apiFetch<GrantEntry[]>(`/api/v1/sharing/${detailShareId}/grants`, token)
       .then(setGrants).catch(() => setGrants([]));
-  }, [selectedShareId, token]);
+  }, [detailShareId, token]);
 
   // modal: folders shared on the picked device (fresh fetch when it changes)
   useEffect(() => {
@@ -196,17 +202,17 @@ export default function PermissionsPage() {
   }
 
   async function addGrant() {
-    if (!selected || !subject.trim()) return;
+    if (!activeShare || !subject.trim()) return;
     const bits = ROLES.find((r) => r.key === role)!.bits;
     if (selectedReadOnly && bits & ~3) {
-      setError(`"${selected.label}" was shared with read-only access — switch it to read & write on the Devices page before granting Editor or Manager.`);
+      setError(`"${selected!.label}" was shared with read-only access — switch it to read & write on the Devices page before granting Editor or Manager.`);
       return;
     }
     setBusy(true); setError(null);
     try {
-      // no share record yet → create it so grants have something to attach to
-      let share = selected.share;
-      if (!share) {
+      let share = activeShare;
+      if (selected && !share) {
+        // no share record yet → create it so grants have something to attach to
         share = await apiFetch<SharedFolder>("/api/v1/sharing", token!, {
           method: "POST",
           body: JSON.stringify({
@@ -228,8 +234,8 @@ export default function PermissionsPage() {
   }
 
   async function changeRole(g: GrantEntry, next: string) {
-    if (!selected?.share) return;
-    const shareId = selected.share.id;
+    if (!activeShare) return;
+    const shareId = activeShare.id;
     const bits = ROLES.find((r) => r.key === next)!.bits;
     if (selectedReadOnly && bits & ~3) return;
     setError(null);
@@ -253,8 +259,8 @@ export default function PermissionsPage() {
   }
 
   async function revokeGrant(g: GrantEntry) {
-    if (!selected?.share) return;
-    await apiFetch(`/api/v1/sharing/${selected.share.id}/grants/${g.id}`, token!, { method: "DELETE" });
+    if (!activeShare) return;
+    await apiFetch(`/api/v1/sharing/${activeShare.id}/grants/${g.id}`, token!, { method: "DELETE" });
     setGrants(grants.filter((x) => x.id !== g.id));
   }
 
@@ -487,16 +493,15 @@ export default function PermissionsPage() {
         </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
           {filtered.map((f) => (
-            <button key={f.key} onClick={() => setSelectedKey(f.key)}
+            <button key={f.key}
+              onClick={() => { setSelectedKey(f.key); setSharedSel(null); setAddOpen(false); setError(null); }}
               className={`card p-4 text-left transition-colors ${
                 selected?.key === f.key
                   ? "border-[var(--color-primary)] ring-1 ring-[var(--color-primary)]"
                   : "card-hover"
               }`}>
               <div className="flex flex-col items-center pt-1 text-center">
-                <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[rgba(251,146,60,0.12)]">
-                  <Folder size={38} className="text-[var(--color-warn)]" />
-                </span>
+                <FolderArt size={56} />
                 <div className="mt-2.5 w-full truncate text-sm font-semibold">{f.label}</div>
                 <span className="pill mt-1">{f.deviceName}</span>
               </div>
@@ -533,121 +538,41 @@ export default function PermissionsPage() {
             hint="Share a folder from the Devices page (or the button above), then grant colleagues access here." />
         )}
 
-        {/* detail for the selected card */}
-        <div className="mt-6">
-          {!selected ? (
-            <EmptyState icon={<ShieldCheck size={20} />} title="Select a shared folder"
-              hint="Pick a folder above to manage who has access." />
-          ) : (
-            <div className="card p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold">{selected.label}</h2>
-                  <div className="mt-0.5 text-xs text-[var(--color-text-dim)]">
-                    {selected.path} · on {selected.deviceName}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    {selected.access === "readwrite" ? (
-                      <span className="badge badge-purple">Full access on device</span>
-                    ) : selected.access === "read" ? (
-                      <>
-                        <span className="badge badge-gray">Read-only on device</span>
-                        <button className="text-[11px] text-[var(--color-accent)] hover:underline"
-                          disabled={busy} onClick={upgradeAccess}>
-                          Switch to Full access
-                        </button>
-                      </>
-                    ) : (
-                      <span className="badge badge-amber">Device offline — access unverified</span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button className="btn btn-primary"
-                    onClick={() => { setAddOpen(true); setRole("viewer"); setError(null); }}>
-                    <UserPlus size={14} /> Add User
-                  </button>
-                  {selected.share && (
-                    <button className="btn btn-danger" onClick={() => setConfirmStop(selected.share!)}>
-                      Stop Sharing
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-5 overflow-hidden rounded-lg border border-[var(--color-border)]">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-[var(--color-surface-2)] text-left text-xs text-[var(--color-text-dim)]">
-                      <th className="px-4 py-2.5 font-medium">User</th>
-                      <th className="px-4 py-2.5 font-medium">Permission</th>
-                      <th className="px-4 py-2.5 font-medium">Can do</th>
-                      <th className="px-4 py-2.5" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {grants.map((g) => (
-                      <tr key={g.id} className="border-t border-[var(--color-border)]">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2.5">
-                            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs font-bold">
-                              {initials(g.subject_user_id)}
-                            </span>
-                            <span className="font-mono text-xs">{g.subject_user_id.slice(0, 8)}…</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Dropdown className="w-36 text-xs"
-                            value={bitsToRole(g.permissions_granted)}
-                            onChange={(v) => changeRole(g, v)}
-                            options={ROLES.map((r) => ({
-                              value: r.key, label: r.label,
-                              disabled: selectedReadOnly && r.key !== "viewer",
-                            }))} />
-                        </td>
-                        <td className="px-4 py-3"><PermBadges bits={g.permissions_granted} /></td>
-                        <td className="px-4 py-3 text-right">
-                          <button className="btn btn-ghost !p-2 text-[var(--color-danger)]"
-                            title="Remove access" onClick={() => revokeGrant(g)}>
-                            <X size={13} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {grants.length === 0 && (
-                      <tr><td colSpan={4} className="px-4 py-8 text-center text-xs text-[var(--color-text-dim)]">
-                        Only you can see this folder — add a user to share it.
-                      </td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-            </div>
-          )}
-        </div>
-
+        {/* shared with you — purple cards */}
         {granted.length > 0 && (
           <>
             <div className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-dim)]">
               Shared with you
             </div>
-            <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
               {granted.map((s) => (
-                <div key={s.grant_id ?? s.id} className="card p-3">
-                  <div className="truncate text-sm font-medium">{s.label || basename(s.root_path)}</div>
-                  <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-[var(--color-text-dim)]">
-                    <span className="truncate">
-                      on {s.device_name} · <span className="capitalize">{bitsToRole(s.permissions ?? 0)}</span>
-                    </span>
-                    {(s.permissions ?? 0) < 255 && (
-                      <button className="shrink-0 text-[var(--color-accent)] hover:underline"
-                        onClick={() => requestUpgrade(s)}>
-                        Request access
-                      </button>
-                    )}
+                <button key={s.grant_id ?? s.id}
+                  onClick={() => { setSharedSel(s); setSelectedKey(null); setAddOpen(false); setSubject(""); setError(null); }}
+                  className={`card p-4 text-left transition-colors ${
+                    sharedSel?.id === s.id
+                      ? "border-[var(--color-primary)] ring-1 ring-[var(--color-primary)]"
+                      : "card-hover"
+                  }`}>
+                  <div className="flex flex-col items-center pt-1 text-center">
+                    <FolderArt size={56} tone="purple" />
+                    <div className="mt-2.5 w-full truncate text-sm font-semibold">
+                      {s.label || basename(s.root_path)}
+                    </div>
+                    <span className="pill mt-1">{s.device_name}</span>
                   </div>
-                </div>
+                  <div className="mt-3 space-y-1 border-t border-[var(--color-border)] pt-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[var(--color-text-dim)]">Owner</span>
+                      <span className="truncate font-medium">{s.owner_email ?? s.device_name}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[var(--color-text-dim)]">Your access</span>
+                      <span className="font-medium capitalize text-[var(--color-accent)]">
+                        {bitsToRole(s.permissions ?? 0)}
+                      </span>
+                    </div>
+                  </div>
+                </button>
               ))}
             </div>
           </>
@@ -655,51 +580,169 @@ export default function PermissionsPage() {
       </div>
       )}
 
-      {/* grant access modal */}
-      {addOpen && selected && (
-        <Modal title={`Grant access — ${selected.label}`}
-          subtitle={`${selected.path} · on ${selected.deviceName}`}
-          icon={<UserPlus size={16} className="text-[var(--color-accent)]" />}
-          onClose={() => { setAddOpen(false); setError(null); }} wide>
-          <input className="input w-full" value={subject} autoFocus
-            placeholder="Colleague's email, @handle, or user ID"
-            onChange={(e) => setSubject(e.target.value)} />
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            {ROLES.map((r) => {
-              const locked = selectedReadOnly && r.key !== "viewer";
-              return (
-                <button key={r.key} disabled={locked} onClick={() => setRole(r.key)}
-                  className={`rounded-lg border p-3 text-left transition-colors ${
-                    role === r.key && !locked
-                      ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
-                      : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
-                  } ${locked ? "cursor-not-allowed opacity-45" : ""}`}>
-                  <div className="flex items-center justify-between">
-                    <r.icon size={15}
-                      className={role === r.key && !locked ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
-                    {locked && <Lock size={11} className="text-[var(--color-text-faint)]" />}
-                  </div>
-                  <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
-                  <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">
-                    {locked ? "Needs read & write on the device" : r.desc}
-                  </div>
+      {/* folder detail modal — owned shares, or shared-with-me folders
+          where we hold Manager access and can delegate further */}
+      {(selected || sharedSel) && (
+        <Modal title={selected?.label ?? (sharedSel!.label || basename(sharedSel!.root_path))}
+          subtitle={selected
+            ? `${selected.path} · on ${selected.deviceName}`
+            : `on ${sharedSel!.device_name} · shared by ${sharedSel!.owner_email ?? "the owner"}`}
+          icon={<ShieldCheck size={16} className="text-[var(--color-accent)]" />}
+          onClose={() => { setSelectedKey(null); setSharedSel(null); setAddOpen(false); setSubject(""); setError(null); }}
+          wide>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {selected && (
+                selected.access === "readwrite" ? (
+                  <span className="badge badge-purple">Full access on device</span>
+                ) : selected.access === "read" ? (
+                  <>
+                    <span className="badge badge-gray">Read-only on device</span>
+                    <button className="text-[11px] text-[var(--color-accent)] hover:underline"
+                      disabled={busy} onClick={upgradeAccess}>
+                      Switch to Full access
+                    </button>
+                  </>
+                ) : (
+                  <span className="badge badge-amber">Device offline — access unverified</span>
+                )
+              )}
+              {sharedSel && (
+                <>
+                  <span className="badge badge-purple capitalize">
+                    {bitsToRole(sharedSel.permissions ?? 0)}
+                  </span>
+                  {!sharedIsManager && (
+                    <span className="text-[11px] text-[var(--color-text-dim)]">
+                      Only the owner and managers can invite others.
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {sharedSel && (sharedSel.permissions ?? 0) < 255 && !sharedIsManager && (
+                <button className="btn btn-ghost" onClick={() => requestUpgrade(sharedSel)}>
+                  Request access
                 </button>
-              );
-            })}
+              )}
+              {sharedSel && sharedIsManager && (
+                <span className="text-[11px] text-[var(--color-text-faint)]">
+                  Delegating — the owner stays in control
+                </span>
+              )}
+              {(selected || sharedIsManager) && (
+                <button className="btn btn-primary"
+                  onClick={() => { setAddOpen((o) => !o); setRole("viewer"); setError(null); }}>
+                  <UserPlus size={14} /> Add User
+                </button>
+              )}
+              {selected?.share && (
+                <button className="btn btn-danger" onClick={() => setConfirmStop(selected.share!)}>
+                  Stop Sharing
+                </button>
+              )}
+            </div>
           </div>
-          {selectedReadOnly && (
-            <p className="mt-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
-              “{selected.label}” was shared with read-only access on {selected.deviceName} —
-              switch it to read &amp; write on the Devices page to grant Editor or Manager.
-            </p>
+
+          {(selected || sharedIsManager) && (
+            <div className="mt-4 overflow-hidden rounded-lg border border-[var(--color-border)]">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-[var(--color-surface-2)] text-left text-xs text-[var(--color-text-dim)]">
+                    <th className="px-4 py-2.5 font-medium">User</th>
+                    <th className="px-4 py-2.5 font-medium">Permission</th>
+                    <th className="px-4 py-2.5 font-medium">Can do</th>
+                    <th className="px-4 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {grants.map((g) => (
+                    <tr key={g.id} className="border-t border-[var(--color-border)]">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs font-bold">
+                            {initials(g.subject_user_id)}
+                          </span>
+                          <span className="font-mono text-xs">{g.subject_user_id.slice(0, 8)}…</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Dropdown className="w-36 text-xs"
+                          value={bitsToRole(g.permissions_granted)}
+                          onChange={(v) => changeRole(g, v)}
+                          options={ROLES.map((r) => ({
+                            value: r.key, label: r.label,
+                            disabled: (selectedReadOnly && r.key !== "viewer")
+                              || (sharedIsManager && r.key === "manager"),
+                          }))} />
+                      </td>
+                      <td className="px-4 py-3"><PermBadges bits={g.permissions_granted} /></td>
+                      <td className="px-4 py-3 text-right">
+                        <button className="btn btn-ghost !p-2 text-[var(--color-danger)]"
+                          title="Remove access" onClick={() => revokeGrant(g)}>
+                          <X size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {grants.length === 0 && (
+                    <tr><td colSpan={4} className="px-4 py-8 text-center text-xs text-[var(--color-text-dim)]">
+                      {selected ? "Only you can see this folder — add a user to share it."
+                                : "No one else has access yet — invite someone."}
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
-          {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
-          <div className="mt-4 flex justify-end gap-2">
-            <button className="btn btn-ghost" onClick={() => { setAddOpen(false); setError(null); }}>Cancel</button>
-            <button className="btn btn-primary" disabled={busy || !subject.trim()} onClick={addGrant}>
-              {busy ? <Spinner size={14} /> : <UserPlus size={14} />} Grant access
-            </button>
-          </div>
+
+          {addOpen && (selected || sharedIsManager) && (
+            <div className="fade-up mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+              <div className="mb-3 text-sm font-medium">Grant access</div>
+              <input className="input w-full" value={subject} autoFocus
+                placeholder="Colleague's email, @handle, or user ID"
+                onChange={(e) => setSubject(e.target.value)} />
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {ROLES.map((r) => {
+                  const locked = (selectedReadOnly && r.key !== "viewer")
+                    || (sharedIsManager && r.key === "manager");
+                  return (
+                    <button key={r.key} disabled={locked} onClick={() => setRole(r.key)}
+                      className={`rounded-lg border p-3 text-left transition-colors ${
+                        role === r.key && !locked
+                          ? "border-[var(--color-primary)] bg-[rgba(139,92,246,0.12)]"
+                          : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+                      } ${locked ? "cursor-not-allowed opacity-45" : ""}`}>
+                      <div className="flex items-center justify-between">
+                        <r.icon size={15}
+                          className={role === r.key && !locked ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"} />
+                        {locked && <Lock size={11} className="text-[var(--color-text-faint)]" />}
+                      </div>
+                      <div className="mt-1.5 text-sm font-semibold">{r.label}</div>
+                      <div className="text-[11px] leading-snug text-[var(--color-text-dim)]">
+                        {locked && sharedIsManager ? "Only the owner can grant Manager"
+                          : locked ? "Needs read & write on the device" : r.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedReadOnly && selected && (
+                <p className="mt-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+                  “{selected.label}” was shared with read-only access on {selected.deviceName} —
+                  switch it to read &amp; write on the Devices page to grant Editor or Manager.
+                </p>
+              )}
+              {error && <p className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
+              <div className="mt-4 flex justify-end gap-2">
+                <button className="btn btn-ghost" onClick={() => { setAddOpen(false); setError(null); }}>Cancel</button>
+                <button className="btn btn-primary" disabled={busy || !subject.trim()} onClick={addGrant}>
+                  {busy ? <Spinner size={14} /> : <UserPlus size={14} />} Grant access
+                </button>
+              </div>
+            </div>
+          )}
         </Modal>
       )}
 

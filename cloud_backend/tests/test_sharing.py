@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.conftest import OTHER_USER, TEST_USER
+from tests.conftest import OTHER_USER, TEST_USER, make_token as _token
 
 pytestmark = pytest.mark.asyncio
 
@@ -113,6 +113,42 @@ async def test_revoked_device_takes_its_shares(client, auth_headers,
     assert r.json()["granted"] == []
     r = await client.get("/api/v1/sharing", headers=auth_headers)
     assert r.json()["owned"] == []
+
+
+async def test_manager_can_delegate_grants(client, auth_headers,
+                                           other_auth_headers):
+    """A collaborator with Manager bits can grant others access to the
+    owner's share — capped at Editor, and the share stays the owner's."""
+    THIRD = "33333333-3333-3333-3333-333333333333"
+    dev_id, folder_id = await _setup_share(client, auth_headers)
+    await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                      headers=auth_headers,
+                      json={"subject": OTHER_USER, "permissions": 2047})
+
+    # manager grants uche an editor grant on the owner's share
+    r = await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                          headers=other_auth_headers,
+                          json={"subject": THIRD, "permissions": 255})
+    assert r.status_code == 201
+
+    # …but cannot escalate another manager
+    r = await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                          headers=other_auth_headers,
+                          json={"subject": THIRD, "permissions": 2047})
+    assert r.status_code == 403
+
+    # managers can list grants on the share too
+    r = await client.get(f"/api/v1/sharing/{folder_id}/grants",
+                         headers=other_auth_headers)
+    assert r.status_code == 200
+
+    # uche sees the folder — under the owner's share, not the manager's
+    third_headers = {"Authorization": f"Bearer {_token(THIRD)}"}
+    r = await client.get("/api/v1/sharing", headers=third_headers)
+    granted = r.json()["granted"]
+    assert len(granted) == 1
+    assert granted[0]["device_id"] == dev_id
+    assert granted[0]["owner_id"] == TEST_USER
 
 
 async def test_file_access_denied_without_grant(
