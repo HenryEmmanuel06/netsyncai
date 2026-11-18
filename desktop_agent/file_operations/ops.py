@@ -356,6 +356,7 @@ def _soffice() -> str | None:
     for cand in (
         r"C:\Program Files\LibreOffice\program\soffice.exe",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
     ):
         if os.path.exists(cand):
             return cand

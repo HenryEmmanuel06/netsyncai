@@ -9,8 +9,13 @@ deliberate: two Windows accounts on one PC are two NetSync devices.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import sqlite3
+import subprocess
+import sys
 import uuid
+from pathlib import Path
 
 log = logging.getLogger("netsync.machine")
 
@@ -33,10 +38,29 @@ def _registry_id() -> str | None:
         return None
 
 
+def _hardware_id() -> str | None:
+    """Non-Windows stable ids: macOS exposes the hardware UUID via ioreg,
+    Linux has /etc/machine-id. Both survive reinstalls and a wiped data dir,
+    so a re-paired PC still resumes its cloud device record."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.check_output(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                timeout=5, text=True, stderr=subprocess.DEVNULL)
+            m = re.search(r'"IOPlatformUUID"\s*=\s*"([0-9a-fA-F-]{36})"', out)
+            return m.group(1).lower() if m else None
+        if os.name == "posix":
+            mid = Path("/etc/machine-id").read_text().strip()
+            return mid or None
+    except Exception:
+        log.exception("hardware machine_id unavailable")
+    return None
+
+
 def machine_id(conn: sqlite3.Connection | None = None) -> str:
     """The machine's stable id. Empty string when nothing can persist one —
     the backend then treats the pair as a brand-new device."""
-    mid = _registry_id()
+    mid = _registry_id() or _hardware_id()
     if mid:
         return mid
     if conn is None:

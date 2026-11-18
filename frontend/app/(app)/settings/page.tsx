@@ -18,6 +18,8 @@ const SECTIONS = [
   { key: "about", label: "About", icon: Info },
 ];
 
+import { agentDownload, isMac } from "@/lib/download";
+
 const AGENT_DOWNLOAD_URL = process.env.NEXT_PUBLIC_AGENT_DOWNLOAD_URL ?? "";
 
 export default function SettingsPage() {
@@ -140,19 +142,19 @@ export default function SettingsPage() {
               </h2>
               <p className="mt-2 text-xs leading-relaxed text-[var(--color-text-dim)]">
                 The NetSync AI app keeps this computer connected in the
-                background — it starts with Windows, lives in the system tray,
-                and handles file transfers and sync for folders you share.
+                background{isMac() ? "" : " — it starts with Windows, lives in the system tray,"}
+                {" "}and handles file transfers and sync for folders you share.
               </p>
               {AGENT_DOWNLOAD_URL && (
-                <a href={AGENT_DOWNLOAD_URL} className="btn btn-primary mt-4">
-                  <Download size={14} /> Download for Windows
+                <a href={agentDownload().url} className="btn btn-primary mt-4">
+                  <Download size={14} /> {agentDownload().label}
                 </a>
               )}
               <ul className="mt-4 space-y-2 text-xs text-[var(--color-text-dim)]">
-                <li>• Starts automatically when you sign in</li>
+                <li>• {isMac() ? "Run it once — it stays connected while it's running" : "Starts automatically when you sign in"}</li>
                 <li>• Pair from Devices → Add this computer — no commands needed</li>
                 <li>• Your shared folders and access levels are managed on the Devices page</li>
-                <li>• Remove it from Settings → Apps → NetSync AI</li>
+                <li>• {isMac() ? "On first launch, right-click → Open to pass Gatekeeper" : "Remove it from Settings → Apps → NetSync AI"}</li>
               </ul>
             </div>
           )}

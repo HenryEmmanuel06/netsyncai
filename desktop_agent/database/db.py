@@ -11,10 +11,15 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 def default_data_dir() -> Path:
     """Writable per-user data dir — never next to the executable."""
     import os
+    import sys
 
     override = os.environ.get("NETSYNC_DATA_DIR")
     if override:
         return Path(override)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "NetSyncAI"
+    if os.name != "nt":
+        return Path.home() / ".local" / "share" / "netsyncai"
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     return Path(base) / "NetSyncAI"
 

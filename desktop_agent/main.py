@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -174,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _attach_parent_console() -> None:
     """The release exe is a windowed app (no console). When a developer runs
     a CLI subcommand from a terminal, reattach to that terminal for output."""
-    if not getattr(sys, "frozen", False) or sys.stdout is not None:
+    if os.name != "nt" or not getattr(sys, "frozen", False) or sys.stdout is not None:
         return
     import ctypes
     if ctypes.windll.kernel32.AttachConsole(-1):  # ATTACH_PARENT_PROCESS
@@ -189,10 +190,22 @@ def is_cli(argv: list[str]) -> bool:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not is_cli(argv):
+        try:
+            from desktop.agent_app import run_app
+        except ImportError as exc:
+            # no tkinter/pystray (headless build, minimal python) — the agent
+            # still works fully through the CLI
+            print(f"NetSync AI {AGENT_VERSION}\n"
+                  f"the desktop app isn't available here ({exc}).\n"
+                  "Use the CLI instead:\n"
+                  "  netsync-agent pair <code>   link this computer\n"
+                  "  netsync-agent run           stay connected (foreground)\n"
+                  "  netsync-agent status        show pairing + folders",
+                  file=sys.stderr)
+            return 2
         pre = argparse.ArgumentParser(add_help=False)
         pre.add_argument("--data-dir", type=Path, default=default_data_dir())
         known, rest = pre.parse_known_args(argv)
-        from desktop.agent_app import run_app
         return run_app(known.data_dir, rest)
 
     _attach_parent_console()

@@ -62,6 +62,8 @@ def _hidden() -> dict:
 
 def register(exe: Path) -> None:
     """Idempotent: (re)point every Windows integration at `exe`."""
+    if os.name != "nt":
+        return  # macOS/Linux integration (launchd, .desktop) not implemented
     import winreg
 
     quoted = f'"{exe}"'
@@ -111,6 +113,8 @@ def _make_shortcut(exe: Path) -> None:
 
 
 def unregister() -> None:
+    if os.name != "nt":
+        return
     import winreg
 
     def _delete_tree(root, path):
@@ -141,8 +145,8 @@ def self_install(argv: list[str]) -> bool:
     when the caller should exit (the installed copy takes over)."""
     from desktop.instance import send_to_running
 
-    if not is_frozen() or running_from_install_dir():
-        return False
+    if os.name != "nt" or not is_frozen() or running_from_install_dir():
+        return False  # Windows-only install flow; other OSes run in place
 
     target = installed_exe()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -172,6 +176,8 @@ def self_install(argv: list[str]) -> bool:
 
 def schedule_self_delete() -> None:
     """The running exe can't delete itself â€” hand off to a short-lived cmd."""
+    if os.name != "nt":
+        return
     exe = installed_exe()
     cmd = f'ping -n 3 127.0.0.1 >nul & del /f /q "{exe}" & rmdir "{exe.parent}"'
     subprocess.Popen(["cmd", "/c", cmd], close_fds=True, **_hidden())

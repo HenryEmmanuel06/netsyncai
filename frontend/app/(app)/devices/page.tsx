@@ -13,6 +13,8 @@ import {
 import { basename, formatBytes, formatDate, timeAgo } from "@/lib/format";
 import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
 
+import { agentDownload } from "@/lib/download";
+
 const AGENT_DOWNLOAD_URL = process.env.NEXT_PUBLIC_AGENT_DOWNLOAD_URL ?? "";
 
 interface DeviceStats {
@@ -69,9 +71,9 @@ function PairModal({ token, onClose }: { token: string; onClose: () => void }) {
   return (
     <Modal title="Connect a computer" onClose={onClose}>
       {AGENT_DOWNLOAD_URL ? (
-        <a href={AGENT_DOWNLOAD_URL}
+        <a href={agentDownload().url}
           className="btn btn-ghost mb-4 w-full justify-center">
-          <Download size={15} /> Download the NetSync AI app (Windows)
+          <Download size={15} /> {agentDownload().label}
         </a>
       ) : (
         <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-dim)]">

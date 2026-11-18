@@ -15,6 +15,7 @@ import logging.handlers
 import os
 import queue
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -192,8 +193,13 @@ class AgentApp:
         self.root.iconphoto(True, self.window_icon)
 
     def _start_tray(self) -> None:
-        import pystray
-        from desktop.icon import make_icon
+        self.tray = None
+        try:
+            import pystray
+            from desktop.icon import make_icon
+        except ImportError:
+            log.info("no tray support on this platform — windows only")
+            return
 
         item = pystray.MenuItem
         menu = pystray.Menu(
@@ -317,7 +323,13 @@ class AgentApp:
         webbrowser.open(dashboard_url().rstrip("/") + (path or "/dashboard"))
 
     def open_logs(self) -> None:
-        os.startfile(self.data_dir / "logs")  # type: ignore[attr-defined]
+        p = str(self.data_dir / "logs")
+        if os.name == "nt":
+            os.startfile(p)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", p])
+        else:
+            subprocess.Popen(["xdg-open", p])
 
     def show_status(self) -> None:
         """Reassure a manual (double-click) launcher that the app is alive —
