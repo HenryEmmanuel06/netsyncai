@@ -8,7 +8,7 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, EmptyState, Field, FolderArt, Modal, PageHeader, Spinner,
+  ConfirmDialog, Dropdown, EmptyState, Field, FolderArt, Modal, PageHeader, Spinner,
 } from "@/components/ui";
 import { basename, formatBytes } from "@/lib/format";
 import type { Device, SharedFolder, SharedFolderInfo, SyncSession } from "@/types";
@@ -253,13 +253,13 @@ function RequestCard({ r, devices, token, onRespond }: {
           <div className="mt-3 space-y-2 border-t border-[var(--color-border)] pt-3">
             <div className="flex flex-wrap items-center gap-2">
               <Monitor size={13} className="text-[var(--color-text-faint)]" />
-              <select className="input !w-auto !py-1.5 text-xs" value={dev}
-                onChange={(e) => { setDev(e.target.value); setRoot(""); }}>
-                <option value="">Your computer…</option>
-                {devices.map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.status !== "online" ? " (offline)" : ""}</option>
-                ))}
-              </select>
+              <Dropdown className="w-48 text-xs" value={dev}
+                placeholder="Your computer…"
+                onChange={(v) => { setDev(v); setRoot(""); }}
+                options={devices.map((d) => ({
+                  value: d.id, label: d.name,
+                  hint: d.status !== "online" ? "offline" : "online",
+                }))} />
               {dev && (
                 <div className="flex overflow-hidden rounded-lg border border-[var(--color-border)] text-xs">
                   <button
@@ -282,16 +282,12 @@ function RequestCard({ r, devices, token, onRespond }: {
             )}
             {dev && destKind === "pick" && (
               folders === null ? <Spinner size={14} /> : (
-                <select className="input !w-auto min-w-56 !py-1.5 text-xs" value={root}
-                  onChange={(e) => setRoot(e.target.value)}>
-                  <option value="">Shared folder to sync into…</option>
-                  {folders.map((f) => (
-                    <option key={f.path} value={f.path}>{f.label || basename(f.path)}</option>
-                  ))}
-                  {folders.length === 0 && (
-                    <option disabled>No read &amp; write folders — share one under Devices first</option>
-                  )}
-                </select>
+                <Dropdown className="w-56 text-xs" value={root}
+                  placeholder="Shared folder to sync into…"
+                  onChange={(v) => setRoot(v)}
+                  options={folders.map((f) => ({
+                    value: f.path, label: f.label || basename(f.path),
+                  }))} />
               )
             )}
           </div>
@@ -521,13 +517,13 @@ export default function SyncPage() {
                 <span className="text-[13px] font-semibold">Your folder</span>
               </div>
               <Field label="Computer">
-                <select className="input w-full" value={aDevice}
-                  onChange={(e) => { setADevice(e.target.value); setAPath(""); }}>
-                  <option value="">Choose a computer…</option>
-                  {devices.map((d) => (
-                    <option key={d.id} value={d.id}>{d.name}{d.status !== "online" ? " (offline)" : ""}</option>
-                  ))}
-                </select>
+                <Dropdown className="w-full" value={aDevice}
+                  placeholder="Choose a computer…"
+                  onChange={(v) => { setADevice(v); setAPath(""); }}
+                  options={devices.map((d) => ({
+                    value: d.id, label: d.name,
+                    hint: d.status !== "online" ? "offline" : "online",
+                  }))} />
               </Field>
               <div>
                 <label className="field-label">Folder or file</label>
@@ -581,13 +577,13 @@ export default function SyncPage() {
               {bKind === "mine" ? (
                 <>
                   <Field label="Computer">
-                    <select className="input w-full" value={bDevice}
-                      onChange={(e) => { setBDevice(e.target.value); setBPath(""); }}>
-                      <option value="">Choose another computer…</option>
-                      {devices.filter((d) => d.id !== aDevice).map((d) => (
-                        <option key={d.id} value={d.id}>{d.name}{d.status !== "online" ? " (offline)" : ""}</option>
-                      ))}
-                    </select>
+                    <Dropdown className="w-full" value={bDevice}
+                      placeholder="Choose another computer…"
+                      onChange={(v) => { setBDevice(v); setBPath(""); }}
+                      options={devices.filter((d) => d.id !== aDevice).map((d) => ({
+                        value: d.id, label: d.name,
+                        hint: d.status !== "online" ? "offline" : "online",
+                      }))} />
                   </Field>
                   <div>
                     <label className="field-label">Folder or file</label>

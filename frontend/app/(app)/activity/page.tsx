@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
-import { EmptyState, PageHeader, Spinner } from "@/components/ui";
+import { Dropdown, EmptyState, PageHeader, Spinner } from "@/components/ui";
 import { basename, formatDate, timeAgo } from "@/lib/format";
 import type { ActivityItem } from "@/types";
 
@@ -86,16 +86,17 @@ export default function ActivityPage() {
       <PageHeader title="Activity" subtitle="Everything that happened across your network." />
       {items && items.length > 0 && (
         <div className="mb-4">
-          <select className="input !py-1.5 text-xs" value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}>
-            <option value="all">All activities</option>
-            <option value="device">Devices</option>
-            <option value="file">Files</option>
-            <option value="folder">Folders</option>
-            <option value="share">Sharing</option>
-            <option value="sync">Sync</option>
-            <option value="ai">AI tasks</option>
-          </select>
+          <Dropdown className="w-44 text-xs" value={typeFilter}
+            onChange={setTypeFilter}
+            options={[
+              { value: "all", label: "All activities" },
+              { value: "device", label: "Devices" },
+              { value: "file", label: "Files" },
+              { value: "folder", label: "Folders" },
+              { value: "share", label: "Sharing" },
+              { value: "sync", label: "Sync" },
+              { value: "ai", label: "AI tasks" },
+            ]} />
         </div>
       )}
       {items === null ? (

@@ -8,7 +8,7 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, EmptyState, Modal, PageHeader, PermBadges, Spinner,
+  ConfirmDialog, Dropdown, EmptyState, Modal, PageHeader, PermBadges, Spinner,
 } from "@/components/ui";
 import { basename, initials, timeAgo } from "@/lib/format";
 import type { Device, GrantEntry, SharedFolder, SharedFolderInfo } from "@/types";
@@ -377,15 +377,13 @@ export default function PermissionsPage() {
                     </div>
                     {r.status === "pending" ? (
                       <>
-                        <select className="input !py-1 text-xs capitalize"
-                          title={reqReadOnly ? "Read-only on the device — only Viewer is allowed" : undefined}
+                        <Dropdown className="w-36 text-xs"
                           value={reqReadOnly ? "viewer" : approveRole[r.id] ?? r.role}
-                          onChange={(e) => setApproveRole({ ...approveRole, [r.id]: e.target.value })}>
-                          {ROLES.map((x) => (
-                            <option key={x.key} value={x.key}
-                              disabled={reqReadOnly && x.key !== "viewer"}>{x.label}</option>
-                          ))}
-                        </select>
+                          onChange={(v) => setApproveRole({ ...approveRole, [r.id]: v })}
+                          options={ROLES.map((x) => ({
+                            value: x.key, label: x.label,
+                            disabled: reqReadOnly && x.key !== "viewer",
+                          }))} />
                         <button className="btn btn-primary !px-3 !py-1.5 text-xs"
                           onClick={() => resolveRequest(r.id, true)}>
                           <Check size={12} /> Approve
@@ -599,19 +597,13 @@ export default function PermissionsPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <select className="input !py-1 text-xs capitalize"
-                            title={selectedReadOnly
-                              ? "Folder is read-only on the device — switch it to Full access to unlock Editor/Manager"
-                              : undefined}
+                          <Dropdown className="w-36 text-xs"
                             value={bitsToRole(g.permissions_granted)}
-                            onChange={(e) => changeRole(g, e.target.value)}>
-                            {ROLES.map((r) => (
-                              <option key={r.key} value={r.key}
-                                disabled={selectedReadOnly && r.key !== "viewer"}>
-                                {r.label}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={(v) => changeRole(g, v)}
+                            options={ROLES.map((r) => ({
+                              value: r.key, label: r.label,
+                              disabled: selectedReadOnly && r.key !== "viewer",
+                            }))} />
                         </td>
                         <td className="px-4 py-3"><PermBadges bits={g.permissions_granted} /></td>
                         <td className="px-4 py-3 text-right">
@@ -717,13 +709,13 @@ export default function PermissionsPage() {
           subtitle="Pick one of the folders shared on this computer — add new ones from the Devices page."
           onClose={() => setShareOpen(false)} wide>
           <label className="mb-1 block text-xs text-[var(--color-text-dim)]">Computer</label>
-          <select className="input mb-3 w-full" value={pickDevice}
-            onChange={(e) => setPickDevice(e.target.value)}>
-            <option value="">Choose…</option>
-            {devices.map((d) => (
-              <option key={d.id} value={d.id}>{d.name} {d.status !== "online" ? "(offline)" : ""}</option>
-            ))}
-          </select>
+          <Dropdown className="mb-3 w-full" value={pickDevice}
+            placeholder="Choose…"
+            onChange={(v) => setPickDevice(v)}
+            options={devices.map((d) => ({
+              value: d.id, label: d.name,
+              hint: d.status !== "online" ? "offline" : "online",
+            }))} />
 
           {pickDevice && (
             <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">

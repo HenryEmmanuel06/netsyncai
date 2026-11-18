@@ -8,7 +8,7 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, EmptyState, Modal, PageHeader, Spinner, StatusDot,
+  ConfirmDialog, Dropdown, EmptyState, Modal, PageHeader, Spinner, StatusDot,
 } from "@/components/ui";
 import { basename, formatBytes, formatDate, timeAgo } from "@/lib/format";
 import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
@@ -16,6 +16,11 @@ import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
 import { useAgentDownload } from "@/lib/download";
 
 const AGENT_DOWNLOAD_URL = process.env.NEXT_PUBLIC_AGENT_DOWNLOAD_URL ?? "";
+
+const ACCESS_OPTIONS = [
+  { value: "read", label: "Read only" },
+  { value: "readwrite", label: "Read & write" },
+];
 
 interface DeviceStats {
   platform: string;
@@ -257,11 +262,9 @@ function FolderManager({ device, token, onClose }: {
                   </div>
                 ) : null}
               </div>
-              <select className="input !py-1 text-xs" value={f.access}
-                onChange={(e) => changeAccess(f.path, e.target.value)}>
-                <option value="read">Read only</option>
-                <option value="readwrite">Read & write</option>
-              </select>
+              <Dropdown className="w-36 text-xs" value={f.access}
+                onChange={(v) => changeAccess(f.path, v)}
+                options={ACCESS_OPTIONS} />
               <button className="btn btn-ghost !p-2" title="Rescan index"
                 disabled={busyPath === f.path} onClick={() => rescan(f.path)}>
                 {busyPath === f.path ? <Spinner size={13} /> : <RefreshCcw size={13} />}
@@ -303,11 +306,9 @@ function FolderManager({ device, token, onClose }: {
                   {busyPath === dirPath ? <Spinner size={12} /> : "Share this folder"}
                 </button>
               )}
-              <select className="input !py-1 text-xs" value={access}
-                onChange={(e) => setAccess(e.target.value as typeof access)}>
-                <option value="read">Read only</option>
-                <option value="readwrite">Read & write</option>
-              </select>
+              <Dropdown className="w-36 text-xs" value={access}
+                onChange={(v) => setAccess(v as typeof access)}
+                options={ACCESS_OPTIONS} />
             </div>
             <div className="max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)]">
               {dirs.map((d) => (
