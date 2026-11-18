@@ -217,6 +217,17 @@ class InMemoryDeviceStore:
         d = self._devices[device_id]
         d["revoked_at"] = _now()
         d["status"] = "offline"
+        # a removed device takes its shares with it — collaborators must not
+        # keep seeing folders they can never reach again
+        for fid in [s["id"] for s in getattr(self, "_shares", {}).values()
+                    if s["device_id"] == device_id]:
+            del self._shares[fid]
+            for gid in [g["id"] for g in self._grants.values()
+                        if g["folder_id"] == fid]:
+                del self._grants[gid]
+            for rid in [r["id"] for r in getattr(self, "_access_requests", {}).values()
+                        if r["folder_id"] == fid]:
+                del self._access_requests[rid]
         return DeviceResponse(**d)
 
     # ── pairing ──
@@ -521,7 +532,9 @@ class InMemoryDeviceStore:
             if g["subject_user_id"] != user_id:
                 continue
             share = getattr(self, "_shares", {}).get(g["folder_id"])
-            if share and not self._is_blocked(share["owner_id"], user_id):
+            dev = self._devices.get(share["device_id"], {}) if share else {}
+            if (share and not dev.get("revoked_at")
+                    and not self._is_blocked(share["owner_id"], user_id)):
                 out.append({**share, "permissions": g["permissions_granted"],
                             "grant_id": g["id"]})
         return out

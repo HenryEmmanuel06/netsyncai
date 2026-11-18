@@ -94,6 +94,27 @@ async def test_revoke_grant(client, auth_headers, other_auth_headers):
     assert r.json()["granted"] == []
 
 
+async def test_revoked_device_takes_its_shares(client, auth_headers,
+                                               other_auth_headers):
+    """A removed device takes its shares with it — the grantee's 'shared with
+    me' list must not keep showing folders that can never be reached."""
+    dev_id, folder_id = await _setup_share(client, auth_headers)
+    await client.post(f"/api/v1/sharing/{folder_id}/grants",
+                      headers=auth_headers,
+                      json={"subject": OTHER_USER, "permissions": 1})
+    r = await client.get("/api/v1/sharing", headers=other_auth_headers)
+    assert len(r.json()["granted"]) == 1
+
+    r = await client.post(f"/api/v1/devices/{dev_id}/revoke",
+                          headers=auth_headers)
+    assert r.status_code == 200
+
+    r = await client.get("/api/v1/sharing", headers=other_auth_headers)
+    assert r.json()["granted"] == []
+    r = await client.get("/api/v1/sharing", headers=auth_headers)
+    assert r.json()["owned"] == []
+
+
 async def test_file_access_denied_without_grant(
     client, auth_headers, other_auth_headers
 ):

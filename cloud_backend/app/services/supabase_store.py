@@ -126,6 +126,14 @@ class SupabaseDeviceStore:
             json={"revoked_at": _now().isoformat(), "status": "offline"},
         )
         r.raise_for_status()
+        # a removed device takes its shares with it — collaborators must not
+        # keep seeing folders they can never reach again. shared_folders
+        # cascades to folder_permissions + access_requests
+        await self._client.delete(
+            "/shared_folders", params={"device_id": f"eq.{device_id}"})
+        await self._client.delete(
+            "/agent_sessions",
+            params={"device_id": f"eq.{device_id}", "disconnected_at": "is.null"})
         return DeviceResponse(**r.json()[0])
 
     # ── pairing ──
@@ -639,7 +647,7 @@ class SupabaseDeviceStore:
             "/folder_permissions",
             params={
                 "subject_user_id": f"eq.{user_id}",
-                "select": "id,permissions_granted,folder_id,shared_folders(*,devices(name),profiles(email))",
+                "select": "id,permissions_granted,folder_id,shared_folders(*,devices(name,revoked_at),profiles(email))",
             },
         )
         r.raise_for_status()
@@ -647,8 +655,9 @@ class SupabaseDeviceStore:
         out = []
         for g in r.json():
             s = g.get("shared_folders")
-            if not s or s.get("owner_id") in blockers:
-                continue
+            if (not s or s.get("owner_id") in blockers
+                    or (s.get("devices") or {}).get("revoked_at")):
+                continue  # dead devices show nothing
             out.append({
                 **self._share_row(s),
                 "device_name": (s.get("devices") or {}).get("name", ""),
@@ -810,7 +819,7 @@ class SupabaseDeviceStore:
         return r.json()[0]
 
     async def list_access_requests(self, user_id: str, direction: str) -> list[dict]:
-        select = ("*,shared_folders!inner(label,device_id,owner_id,devices(name)),"
+        select = ("*,shared_folders!inner(label,device_id,owner_id,devices(name,revoked_at)),"
                   "profiles!access_requests_requester_id_fkey(email)")
         if direction == "incoming":
             params = {"select": select, "shared_folders.owner_id": f"eq.{user_id}"}
@@ -821,6 +830,8 @@ class SupabaseDeviceStore:
         out = []
         for row in r.json():
             s = row.get("shared_folders") or {}
+            if (s.get("devices") or {}).get("revoked_at"):
+                continue  # dead devices show nothing
             out.append({
                 **{k: row.get(k) for k in ("id", "requester_id", "folder_id",
                                            "role", "status", "created_at")},
