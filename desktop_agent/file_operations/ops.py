@@ -89,6 +89,16 @@ class AgentContext:
         try:
             return roots.safe_resolve(raw)
         except PathSecurityError as exc:
+            if write:
+                try:
+                    self.roots_for(write=False).safe_resolve(raw)
+                except PathSecurityError:
+                    pass
+                else:
+                    raise OpDenied(
+                        "this folder is shared read-only — the owner must set "
+                        "it to Full access before you can change things inside"
+                    ) from exc
             raise OpDenied(str(exc)) from exc
 
     def transfer_state(self, transfer_id: str) -> IncomingTransfer:
