@@ -190,8 +190,10 @@ function FilesInner() {
 
   async function doMkdir() {
     if (!picker || !mkdirName.trim()) return;
+    // remote paths use the target OS's separator — '\' breaks POSIX agents
+    const sep = path.startsWith("/") ? "/" : "\\";
     await filesFetch(`/api/v1/devices/${picker.deviceId}/mkdir`, token!, {
-      method: "POST", body: JSON.stringify({ path: path.replace(/[/\\]+$/, "") + "\\" + mkdirName.trim() }),
+      method: "POST", body: JSON.stringify({ path: path.replace(/[/\\]+$/, "") + sep + mkdirName.trim() }),
     });
     setMkdirOpen(false); setMkdirName("");
     browse(picker.deviceId, path);

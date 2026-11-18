@@ -12,6 +12,7 @@ import functools
 import hashlib
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -374,11 +375,14 @@ async def upload(
     await _authorize(device_id, auth, store, path, PERM_UPLOAD)
     transfer_id = str(uuid.uuid4())
     hasher = hashlib.sha256()
+    # multipart filename is attacker-controlled input — keep the basename
+    # only so it can't escape the destination directory
+    filename = Path(file.filename or "upload").name or "upload"
 
     # 1. command first — the agent registers the pending write + dest path
     step_id = await dispatcher.send_command(
         device_id, "send_file",
-        {"path": path, "transfer_id": transfer_id},
+        {"path": path, "transfer_id": transfer_id, "name": filename},
     )
 
     # 2. then stream the payload

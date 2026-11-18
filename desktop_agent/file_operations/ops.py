@@ -312,7 +312,7 @@ async def op_send_file(ctx: AgentContext, args: dict) -> dict:
     """Receive a push transfer: dest path + chunks via incoming queue."""
     dest = ctx.check_path(args["path"], write=True)
     if dest.is_dir():
-        dest = dest / args.get("name", "upload")
+        dest = dest / (Path(args.get("name") or "").name or "upload")
     transfer_id = args["transfer_id"]
     state = ctx.transfer_state(transfer_id)
     state.dest = dest

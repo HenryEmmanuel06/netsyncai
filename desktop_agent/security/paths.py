@@ -66,6 +66,10 @@ class AllowedRoots:
         is caught by the relative_to check on the resolved path.
         """
         raw = Path(candidate)
+        if os.sep == "/" and "\\" in str(raw):
+            # cross-platform callers may build remote paths with '\'; on a
+            # POSIX agent that backslash is part of a name, not a separator
+            raw = Path(str(raw).replace("\\", "/"))
         if not raw.is_absolute():
             # Relative paths are resolved against each root until one fits.
             for root in self._roots:
