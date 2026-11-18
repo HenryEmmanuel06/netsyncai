@@ -19,19 +19,40 @@ export function Dropdown({ value, options, onChange, placeholder = "Choose…", 
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // fixed coords from the trigger rect — the menu must escape
+  // overflow-hidden ancestors (tables, modals) that would clip it
+  const [pos, setPos] = useState<{ top: number; left?: number; right?: number; up?: boolean } | null>(null);
   const current = options.find((o) => o.value === value);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setPos(null); return; }
+    const measure = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const MENU_MAX = 288 + 8;                       // max-h-72 + margin
+      const below = window.innerHeight - r.bottom;
+      const up = below < MENU_MAX && r.top > below;
+      const left = align === "right"
+        ? { right: window.innerWidth - r.right }
+        : { left: r.left };
+      setPos({ top: up ? r.top - 6 : r.bottom + 6, up, ...left });
+    };
+    measure();
     const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const close = () => setOpen(false);               // any scroll resyncs the anchor
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
     };
-  }, [open]);
+  }, [open, align]);
 
   const groups: { name?: string; items: DropdownOption[] }[] = [];
   for (const o of options) {
@@ -42,7 +63,7 @@ export function Dropdown({ value, options, onChange, placeholder = "Choose…", 
 
   return (
     <div ref={ref} className={`relative ${className}`}>
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open}
+      <button ref={btnRef} type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open}
         className={`input flex w-full items-center gap-2 text-left ${open ? "!border-[rgba(139,92,246,0.7)] !shadow-[0_0_0_3px_rgba(139,92,246,0.16)]" : ""}`}>
         {current?.icon}
         <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-[var(--color-text-faint)]"}`}>
@@ -51,9 +72,14 @@ export function Dropdown({ value, options, onChange, placeholder = "Choose…", 
         {current?.hint && <span className="shrink-0 text-[11px] text-[var(--color-text-faint)]">{current.hint}</span>}
         <ChevronDown size={14} className={`shrink-0 text-[var(--color-text-dim)] transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && (
+      {open && pos && (
+        <div className="fixed z-[60]" style={{
+          top: pos.top, left: pos.left, right: pos.right,
+          minWidth: btnRef.current?.offsetWidth,
+          ...(pos.up ? { transform: "translateY(-100%)" } : {}),
+        }}>
         <div role="listbox"
-          className={`card pop-in absolute top-full z-40 mt-1.5 max-h-72 min-w-full overflow-y-auto p-1.5 !shadow-[0_16px_40px_-8px_rgba(0,0,0,0.7)] ${align === "right" ? "right-0" : "left-0"}`}
+          className="card pop-in max-h-72 min-w-full overflow-y-auto p-1.5 !shadow-[0_16px_40px_-8px_rgba(0,0,0,0.7)]"
           style={{ width: "max-content", maxWidth: 340 }}>
           {groups.map((g, gi) => (
             <div key={gi} className={gi > 0 ? "mt-1 border-t border-[var(--color-border)] pt-1" : ""}>
@@ -79,6 +105,7 @@ export function Dropdown({ value, options, onChange, placeholder = "Choose…", 
           {options.length === 0 && (
             <div className="px-3 py-4 text-center text-xs text-[var(--color-text-faint)]">Nothing to choose yet</div>
           )}
+        </div>
         </div>
       )}
     </div>
