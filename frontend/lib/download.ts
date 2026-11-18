@@ -62,10 +62,11 @@ export function useAgentDownload(): { url: string; label: string; note?: string 
           setResolved({
             url: hit.browser_download_url,
             note: isMac()
-              ? "Unzip the download, then right-click → Open “NetSync Agent.command” " +
-                "(Gatekeeper asks once — the app isn't signed yet). First run unpacks " +
-                "its bundled Python and installs components — needs internet once, then " +
-                "the NetSync window opens and stays connected while it runs."
+              ? "Works on Intel and Apple Silicon Macs. Unzip the download, then " +
+                "right-click → Open “NetSync Agent.command” (Gatekeeper asks once — " +
+                "the app isn't signed yet). First run unpacks its bundled Python and " +
+                "installs components — needs internet once, then the NetSync window " +
+                "opens and stays connected while it runs."
               : undefined,
           });
         } else if (isMac() && rel.tag_name) {
