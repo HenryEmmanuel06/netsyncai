@@ -150,15 +150,19 @@ async def op_list_folders(ctx: AgentContext, args: dict) -> dict:
     folders = _folder_rows(ctx.conn)
     for f in folders:
         f["indexing"] = f["id"] in ctx.indexing
+        p = (getattr(ctx, "index_progress", None) or {}).get(f["id"])
+        if p:
+            f["index_done"], f["index_total"] = p.get("done"), p.get("total")
     return {"folders": folders}
 
 
-def _index_in_thread(data_dir: Path, folder_id: int) -> dict:
+def _index_in_thread(data_dir: Path, folder_id: int,
+                     progress: dict | None = None) -> dict:
     # sqlite connections are per-thread: open a dedicated one
     from database.db import connect
     conn = connect(data_dir)
     try:
-        stats = index_folder(conn, folder_id)
+        stats = index_folder(conn, folder_id, progress=progress)
         conn.execute(
             "UPDATE indexed_folders SET last_indexed_at = datetime('now') WHERE id = ?",
             (folder_id,),
@@ -171,13 +175,17 @@ def _index_in_thread(data_dir: Path, folder_id: int) -> dict:
 
 async def _run_index(ctx: AgentContext, folder_id: int) -> dict | None:
     """Caller must already have added folder_id to ctx.indexing."""
+    progress: dict = {"done": 0, "total": None}
+    ctx.index_progress[folder_id] = progress
     try:
-        return await asyncio.to_thread(_index_in_thread, ctx.data_dir, folder_id)
+        return await asyncio.to_thread(
+            _index_in_thread, ctx.data_dir, folder_id, progress)
     except Exception:
         log.exception("indexing folder %s failed", folder_id)
         return None
     finally:
         ctx.indexing.discard(folder_id)
+        ctx.index_progress.pop(folder_id, None)
 
 
 async def reindex(ctx: AgentContext, folder_id: int) -> dict | None:

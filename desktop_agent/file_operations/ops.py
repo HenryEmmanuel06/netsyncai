@@ -65,6 +65,7 @@ class AgentContext:
         self.incoming: dict[str, IncomingTransfer] = {}
         self.recent_transfers: list[dict] = []   # finished rows for the UI
         self.indexing: set[int] = set()          # folder ids being indexed
+        self.index_progress: dict[int, dict] = {}  # id → {done, total}
         self.background: set[asyncio.Task] = set()
         db_file = conn.execute("PRAGMA database_list").fetchone()["file"]
         self.data_dir = Path(db_file).parent if db_file else None

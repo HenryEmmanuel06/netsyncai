@@ -38,6 +38,8 @@ interface PermFolder {
   label: string;
   access?: string;          // undefined = can't verify (device offline)
   indexing?: boolean;
+  index_done?: number;
+  index_total?: number;
   share?: SharedFolder;
 }
 
@@ -132,7 +134,8 @@ export default function PermissionsPage() {
           key: `f:${d.id}:${normPath(r.path)}`,
           deviceId: d.id, deviceName: d.name, path: r.path,
           label: r.label || basename(r.path),
-          access: r.access, indexing: r.indexing, share,
+          access: r.access, indexing: r.indexing,
+          index_done: r.index_done, index_total: r.index_total, share,
         });
       }
     }
@@ -507,7 +510,11 @@ export default function PermissionsPage() {
                       ) : (
                         <span className="badge badge-amber">device offline</span>
                       )}
-                      {f.indexing && <span className="badge badge-amber">indexing…</span>}
+                      {f.indexing && (
+                        <span className="badge badge-amber">
+                          indexing…{f.index_total ? ` ${Math.round(((f.index_done ?? 0) / f.index_total) * 100)}%` : ""}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

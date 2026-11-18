@@ -173,6 +173,14 @@ function FolderManager({ device, token, onClose }: {
 
   useEffect(() => { load(); loadDir(""); }, [load, loadDir]);
 
+  // poll faster while a folder is indexing so the % actually moves
+  const anyIndexing = folders?.some((f) => f.indexing) ?? false;
+  useEffect(() => {
+    if (!anyIndexing) return;
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, [anyIndexing, load]);
+
   async function add(path: string) {
     setBusyPath(path);
     try {
@@ -231,8 +239,23 @@ function FolderManager({ device, token, onClose }: {
                 <div className="truncate text-sm font-medium">{f.label || basename(f.path)}</div>
                 <div className="truncate text-xs text-[var(--color-text-dim)]">
                   {f.path} · {f.file_count} files · {formatBytes(f.total_size)}
-                  {f.indexing ? " · indexing…" : ""}
+                  {f.indexing ? (
+                    <>
+                      {" · indexing… "}
+                      {f.index_total
+                        ? <span className="font-medium text-[var(--color-accent)]">
+                            {Math.round(((f.index_done ?? 0) / f.index_total) * 100)}%
+                          </span>
+                        : <span className="text-[var(--color-accent)]">{f.index_done ?? 0} files</span>}
+                    </>
+                  ) : ""}
                 </div>
+                {f.indexing && f.index_total ? (
+                  <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+                    <div className="h-full rounded-full bg-[var(--color-accent)] transition-all"
+                      style={{ width: `${Math.round(((f.index_done ?? 0) / f.index_total) * 100)}%` }} />
+                  </div>
+                ) : null}
               </div>
               <select className="input !py-1 text-xs" value={f.access}
                 onChange={(e) => changeAccess(f.path, e.target.value)}>

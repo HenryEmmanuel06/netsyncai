@@ -41,6 +41,19 @@ async def _wait_indexed(ctx):
     raise AssertionError("indexing did not finish")
 
 
+def test_index_progress_reports_counts(conn, tmp_path, allow_tmp):
+    """Progress dict fills in done/total so the UI can show a percentage."""
+    from indexing.indexer import index_folder, register_folder
+    for i in range(5):
+        (tmp_path / f"f{i}.txt").write_text("x")
+    fid = register_folder(conn, tmp_path, label="t", access="read")
+    progress: dict = {"done": 0, "total": None}
+    stats = index_folder(conn, fid, progress=progress)
+    # every file the pre-scan counted ends up processed by the index walk
+    assert progress["done"] == progress["total"]
+    assert stats.added == progress["total"]
+
+
 # ── protection rules ─────────────────────────────────────────────────────────
 
 def test_drive_root_blocked():

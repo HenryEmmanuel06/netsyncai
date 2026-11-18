@@ -65,6 +65,7 @@ def index_folder(
     conn: sqlite3.Connection,
     folder_id: int,
     ignores: frozenset[str] = DEFAULT_IGNORES,
+    progress: dict | None = None,
 ) -> IndexStats:
     """Walk a registered folder and reconcile the `files` table."""
     row = conn.execute(
@@ -76,6 +77,18 @@ def index_folder(
     stats = IndexStats()
     seen: set[str] = set()
     pending = 0  # writes since last commit — batch so other ops aren't starved
+
+    if progress is not None:
+        # quick pre-scan so the UI can show a real percentage — listing names
+        # is a fraction of the stat/hash/index work below
+        total = 0
+        if root.is_file():
+            total = 1
+        else:
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in ignores]
+                total += len([f for f in filenames if f not in ignores])
+        progress["total"], progress["done"] = total, 0
 
     if root.is_file():
         # a registered "folder" may be a single shared file — index just it
@@ -105,6 +118,8 @@ def index_folder(
             if fname in ignores:
                 stats.skipped += 1
                 continue
+            if progress is not None:
+                progress["done"] += 1
             full = Path(dirpath) / fname
             try:
                 rel = str(full.relative_to(root))

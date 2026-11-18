@@ -78,6 +78,8 @@ export interface SharedFolderInfo {
   file_count: number;
   total_size: number;
   indexing?: boolean;
+  index_done?: number;
+  index_total?: number;
   last_indexed_at?: string | null;
 }
 
