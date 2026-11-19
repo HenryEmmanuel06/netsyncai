@@ -241,7 +241,7 @@ async def run_session(
 
 
 async def run_forever(
-    coordinator_url: str,
+    coordinator_url: str | list[str],
     device_id: str,
     credential: str,
     agent_version: str,
@@ -250,12 +250,19 @@ async def run_forever(
     machine_id: str = "",
 ) -> None:
     """Reconnecting outer loop — the agent's main resident coroutine.
-    Raises CredentialRejected when the device must be re-paired."""
+    Raises CredentialRejected when the device must be re-paired.
+
+    `coordinator_url` may be a single URL or a failover list — on a lost
+    connection the agent rotates to the next backend before backing off,
+    so a dead primary fails over to a self-hosted secondary."""
+    urls = [coordinator_url] if isinstance(coordinator_url, str) else list(coordinator_url)
     delays = backoff_delays()
+    idx = 0
     while True:
+        url = urls[idx % len(urls)]
         try:
             await run_session(
-                coordinator_url, device_id, credential, agent_version,
+                url, device_id, credential, agent_version,
                 conn=conn, on_status=on_status, machine_id=machine_id,
             )
         except (asyncio.CancelledError, CredentialRejected) as exc:
@@ -265,9 +272,15 @@ async def run_forever(
             raise
         except Exception as exc:
             delay = next(delays)
-            log.warning("connection lost (%s); retrying in %.0fs", exc, delay)
+            if len(urls) > 1:
+                idx += 1
+                log.warning("%s unreachable (%s); trying %s in %.0fs",
+                            url, exc, urls[idx % len(urls)], delay)
+            else:
+                log.warning("connection lost (%s); retrying in %.0fs", exc, delay)
             _notify(on_status, "offline", str(exc))
             await asyncio.sleep(delay)
         else:
             _notify(on_status, "offline")
-            delays = backoff_delays()  # clean disconnect: reset backoff
+            idx = 0                      # back to primary on next connect
+            delays = backoff_delays()    # clean disconnect: reset backoff

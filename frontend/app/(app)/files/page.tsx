@@ -7,7 +7,7 @@ import {
   FolderPlus, FolderX, HardDrive, LayoutGrid, List, Monitor, Pencil, Plus,
   Search, Tag, Trash2, Upload, X,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { API_URL_BACKUP, activeUrl, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import { useTransfers } from "@/components/TransferCenter";
 import {
@@ -241,7 +241,7 @@ function FilesInner() {
   async function doUpload(fileList: FileList | null) {
     if (!picker || !fileList?.length || !token) return;
     setUploading(true);
-    const base = process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000";
+    const base = activeUrl();
     try {
       for (const f of Array.from(fileList)) {
         const t = transfers.begin(f.name, f.size, "up");
@@ -282,13 +282,20 @@ function FilesInner() {
 
   async function download(e: RemoteFileEntry) {
     if (!picker || !token) return;
-    const base = process.env.NEXT_PUBLIC_CLOUD_API_URL ?? "http://localhost:8000";
+    const base = activeUrl();
     const t = transfers.begin(e.name, e.size ?? 0, "down");
     try {
-      const res = await fetch(
-        `${base}/api/v1/devices/${picker.deviceId}/download?path=${encodeURIComponent(e.path ?? e.rel_path)}`,
-        { headers: { Authorization: `Bearer ${token}` }, signal: t.signal },
-      );
+      const dl = `${base}/api/v1/devices/${picker.deviceId}/download?path=${encodeURIComponent(e.path ?? e.rel_path)}`;
+      const headers = { Authorization: `Bearer ${token}` };
+      let res: Response;
+      try {
+        res = await fetch(dl, { headers, signal: t.signal });
+      } catch (err) {
+        if (!API_URL_BACKUP || base === API_URL_BACKUP || t.signal.aborted) throw err;
+        res = await fetch(
+          `${API_URL_BACKUP}/api/v1/devices/${picker.deviceId}/download?path=${encodeURIComponent(e.path ?? e.rel_path)}`,
+          { headers, signal: t.signal });
+      }
       if (!res.ok || !res.body) throw new Error(`download failed (${res.status})`);
       const reader = res.body.getReader();
       const chunks: Uint8Array[] = [];

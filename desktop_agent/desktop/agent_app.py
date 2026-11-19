@@ -27,7 +27,9 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from agent_config import AGENT_VERSION, dashboard_url, default_coordinator
+from agent_config import (
+    AGENT_VERSION, coordinator_candidates, dashboard_url, default_coordinator,
+)
 from database.db import connect, get_setting, set_setting
 from networking.coordinator import (
     CredentialRejected,
@@ -251,7 +253,7 @@ class AgentApp:
     def start_agent(self) -> None:
         self.stop_agent()
         s = self._settings()
-        coordinator = s["coordinator_url"] or default_coordinator()
+        coordinator = coordinator_candidates(s["coordinator_url"])
         data_dir = self.data_dir
 
         def on_status(state, detail=None):

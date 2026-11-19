@@ -48,6 +48,20 @@ def default_coordinator() -> str:
     return bundled_config().get("coordinator_url", "http://localhost:8000")
 
 
+def coordinator_candidates(saved: str | None = None) -> list[str]:
+    """Failover order: the configured URL → bundled fallback URLs (e.g. a
+    self-hosted backup backend). The agent rotates through them on
+    connection failures; the primary is always tried first."""
+    urls = [saved or default_coordinator()]
+    extra = bundled_config().get("coordinator_fallback_urls") or []
+    if isinstance(extra, str):
+        extra = [extra]
+    for u in extra:
+        if u and u not in urls:
+            urls.append(u)
+    return urls
+
+
 def dashboard_url() -> str:
     if url := os.environ.get("NETSYNC_DASHBOARD_URL"):
         return url

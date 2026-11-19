@@ -1,0 +1,30 @@
+# Failover backend — runs the same container as Render, pointed at the
+# same Supabase project. From the cloud_backend/ dir:
+#   docker compose -f deploy/docker-compose.yml --env-file .env up -d
+# Caddy terminates TLS with an auto-managed Let's Encrypt cert for DOMAIN.
+services:
+  app:
+    build: ..
+    restart: unless-stopped
+    environment:
+      - PORT=8000
+    env_file: ../.env
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    environment:
+      - DOMAIN=${DOMAIN:?set DOMAIN in .env, e.g. api-fallback.example.com}
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:

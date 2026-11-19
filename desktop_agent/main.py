@@ -23,7 +23,9 @@ import os
 import sys
 from pathlib import Path
 
-from agent_config import AGENT_VERSION, default_coordinator
+from agent_config import (
+    AGENT_VERSION, coordinator_candidates, default_coordinator,
+)
 from database.db import connect, default_data_dir, get_setting, set_setting
 from indexing.indexer import index_folder, register_folder, search_files
 from networking.coordinator import (
@@ -108,11 +110,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     conn = connect(args.data_dir)
     device_id = get_setting(conn, "device_id")
     credential = get_setting(conn, "device_credential")
-    coordinator = (
-        args.coordinator
-        or get_setting(conn, "coordinator_url")
-        or default_coordinator()
-    )
+    coordinator = coordinator_candidates(
+        args.coordinator or get_setting(conn, "coordinator_url"))
     if not device_id or not credential:
         print("not paired — run `main.py pair <code>` first", file=sys.stderr)
         return 2

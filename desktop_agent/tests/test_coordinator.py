@@ -115,6 +115,39 @@ async def test_run_forever_stops_when_device_revoked():
         await server.wait_closed()
 
 
+async def test_run_forever_fails_over_to_backup_url():
+    """With a URL list, a dead primary must rotate to the backup backend
+    instead of backing off forever."""
+    states = []
+    connected = asyncio.Event()
+
+    async def live_coordinator(ws):
+        await ws.recv()  # hello
+        await ws.send(Envelope(type=MessageType.PONG).model_dump_json())
+        connected.set()
+        async for _ in ws:
+            pass
+
+    server, url = await _serve(live_coordinator)
+    try:
+        base = url.replace("ws://", "http://")
+        task = asyncio.create_task(run_forever(
+            ["http://127.0.0.1:1", base], "dev-1", "cred", "0.3.0",
+            on_status=lambda s, d=None: states.append(s)))
+        for _ in range(300):
+            if "online" in states:
+                break
+            await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert "online" in states
+        assert connected.is_set()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
 async def test_agent_answers_server_ping():
     pong_seen = asyncio.Event()
 
