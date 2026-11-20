@@ -113,6 +113,62 @@ export function Dropdown({ value, options, onChange, placeholder = "Choose…", 
   );
 }
 
+/** Barebones expandable picker — plain divs that overlay the content
+ *  above the trigger (bottom-full), so nothing — clipping, stacking or
+ *  fixed positioning — can hide the options. Use where Dropdown's
+ *  fixed-position menu has rendered unreliably. */
+export function InlinePick({ value, placeholder, options, onPick,
+  empty = "Nothing here", className = "w-48" }: {
+  value: string; placeholder: string; options: DropdownOption[];
+  onPick: (v: string) => void; empty?: string; className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const cur = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="input flex w-full items-center gap-2 !py-1.5 text-left text-xs">
+        <span className={`min-w-0 flex-1 truncate ${cur ? "" : "text-[var(--color-text-faint)]"}`}>
+          {cur?.label ?? placeholder}
+        </span>
+        <ChevronDown size={13} className={`shrink-0 text-[var(--color-text-dim)] transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 z-20 mb-1 max-h-48 min-w-full overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] shadow-[0_16px_40px_-8px_rgba(0,0,0,0.7)]">
+          {options.length === 0 ? (
+            <div className="px-3 py-2.5 text-[11px] text-[var(--color-warn)]">{empty}</div>
+          ) : options.map((o) => (
+            <button key={o.value} type="button" disabled={o.disabled}
+              onClick={() => { onPick(o.value); setOpen(false); }}
+              className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--color-surface-3)] disabled:opacity-40 ${
+                o.value === value ? "text-[var(--color-accent)]" : "text-[var(--color-text-dim)]"
+              }`}>
+              {o.icon}
+              <span className="min-w-0 flex-1 truncate">{o.label}</span>
+              {o.hint && <span className="shrink-0 text-[10px] text-[var(--color-text-faint)]">{o.hint}</span>}
+              <Check size={12} className={`shrink-0 text-[var(--color-accent)] ${o.value === value ? "" : "invisible"}`} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PageHeader({ title, subtitle, actions }: {
   title: string; subtitle?: string; actions?: React.ReactNode;
 }) {

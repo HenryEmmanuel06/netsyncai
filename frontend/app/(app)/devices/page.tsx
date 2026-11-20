@@ -8,7 +8,7 @@ import {
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, Dropdown, EmptyState, Modal, PageHeader, Spinner,
+  ConfirmDialog, EmptyState, InlinePick, Modal, PageHeader, Spinner,
 } from "@/components/ui";
 import { basename, formatBytes, formatDate, timeAgo } from "@/lib/format";
 import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
@@ -262,8 +262,9 @@ function FolderManager({ device, token, onClose }: {
                   </div>
                 ) : null}
               </div>
-              <Dropdown className="w-36 text-xs" value={f.access}
-                onChange={(v) => changeAccess(f.path, v)}
+              <InlinePick className="w-36" value={f.access}
+                placeholder="Access…"
+                onPick={(v) => changeAccess(f.path, v)}
                 options={ACCESS_OPTIONS} />
               <button className="btn btn-ghost !p-2" title="Rescan index"
                 disabled={busyPath === f.path} onClick={() => rescan(f.path)}>
@@ -306,8 +307,9 @@ function FolderManager({ device, token, onClose }: {
                   {busyPath === dirPath ? <Spinner size={12} /> : "Share this folder"}
                 </button>
               )}
-              <Dropdown className="w-36 text-xs" value={access}
-                onChange={(v) => setAccess(v as typeof access)}
+              <InlinePick className="w-36" value={access}
+                placeholder="Access…"
+                onPick={(v) => setAccess(v as typeof access)}
                 options={ACCESS_OPTIONS} />
             </div>
             <div className="max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)]">
