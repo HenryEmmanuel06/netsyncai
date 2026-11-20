@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Check, ChevronDown, ChevronRight, CloudOff, Download, Eye, FileText, Folder,
   FolderPlus, FolderX, HardDrive, LayoutGrid, List, Monitor, Pencil, Plus,
-  Search, Tag, Trash2, Upload, X,
+  Replace, Search, Tag, Trash2, Upload, X,
 } from "lucide-react";
 import { API_URL_BACKUP, activeUrl, apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -64,6 +64,8 @@ function FilesInner() {
   const [deleting, setDeleting] = useState<RemoteFileEntry | null>(null);
   const [uploading, setUploading] = useState(false);
   const uploadRef = useState<HTMLInputElement | null>(null);
+  const replaceRef = useState<HTMLInputElement | null>(null);
+  const [replacing, setReplacing] = useState<RemoteFileEntry | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [treeRoots, setTreeRoots] = useState<Record<string, Root[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -265,6 +267,44 @@ function FilesInner() {
     } finally { setUploading(false); }
   }
 
+  /** Swap a remote file for a local one — same extension required, the
+   *  incoming file takes the old name and the old copy is overwritten. */
+  async function doReplace(fileList: FileList | null) {
+    const target = replacing;
+    setReplacing(null);
+    const f = fileList?.[0];
+    if (!picker || !f || !target || !token) return;
+    const extOf = (n: string) => (n.includes(".") ? n.split(".").pop()! : "");
+    if (extOf(f.name).toLowerCase() !== extOf(target.name).toLowerCase()) {
+      setError(`"${f.name}" isn't a ${extOf(target.name).toUpperCase()} file — replace must use the same type.`);
+      return;
+    }
+    setError(null); setNotice(null); setUploading(true);
+    const base = activeUrl();
+    try {
+      const t = transfers.begin(target.name, f.size, "up");
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST",
+          `${base}/api/v1/devices/${picker.deviceId}/upload?path=${encodeURIComponent(path)}&overwrite=1`);
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.upload.onprogress = (ev) => transfers.progress(t.id, ev.loaded);
+        xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`replace failed (${xhr.status})`)));
+        xhr.onerror = () => reject(new Error("replace failed"));
+        const abort = () => { xhr.abort(); reject(new DOMException("aborted", "AbortError")); };
+        t.signal.addEventListener("abort", abort, { once: true });
+        const fd = new FormData();
+        // the new file is stored under the OLD name — the backend only
+        // keeps the basename, so this can't escape the destination dir
+        fd.append("file", f, target.name);
+        xhr.send(fd);
+      }).then(() => transfers.finish(t.id))
+        .catch((err) => { if (!t.signal.aborted) transfers.fail(t.id, err instanceof Error ? err.message : "failed"); });
+      setNotice(`Replaced ${target.name}`);
+      browse(picker.deviceId, path);
+    } finally { setUploading(false); }
+  }
+
   async function convert(e: RemoteFileEntry) {
     if (!picker) return;
     setError(null); setNotice(null);
@@ -357,6 +397,11 @@ function FilesInner() {
             <button className="menu-item" onClick={() => { setRenaming(e); setRenameTo(e.name); setMenu(null); }}>
               <Pencil size={13} /> Rename
             </button>
+            {!dir && (
+              <button className="menu-item" onClick={() => { setReplacing(e); replaceRef[0]?.click(); setMenu(null); }}>
+                <Replace size={13} /> Replace
+              </button>
+            )}
             <button className="menu-item text-[var(--color-danger)]" onClick={() => { setDeleting(e); setMenu(null); }}>
               <Trash2 size={13} /> Delete
             </button>
@@ -431,6 +476,10 @@ function FilesInner() {
                   <input type="file" multiple className="hidden"
                     ref={(el) => uploadRef[1](el)}
                     onChange={(e) => { doUpload(e.target.files); e.target.value = ""; }} />
+                  <input type="file" className="hidden"
+                    ref={(el) => replaceRef[1](el)}
+                    accept={replacing?.name.includes(".") ? `.${replacing.name.split(".").pop()}` : undefined}
+                    onChange={(e) => { doReplace(e.target.files); e.target.value = ""; }} />
                 </label>
               </>
             )}

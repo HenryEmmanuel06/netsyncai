@@ -247,6 +247,35 @@ async def test_send_file_collision_renames(rw_ctx, sample_tree):
     assert "README (1).md" in r1["written"]   # README.md already exists
 
 
+async def test_send_file_overwrite_replaces_same_name(rw_ctx, sample_tree):
+    """overwrite=1: the incoming file takes the old name instead of a
+    collision suffix — the browser's Replace action relies on this."""
+    old = (sample_tree / "README.md").read_bytes()
+    payload = b"brand-new-contents"
+    digest = hashlib.sha256(payload).hexdigest()
+    state = rw_ctx.transfer_state("ov1")
+
+    handler = asyncio.create_task(HANDLERS["send_file"](
+        rw_ctx, {"path": str(sample_tree / "README.md"),
+                 "transfer_id": "ov1", "overwrite": True}
+    ))
+    await asyncio.sleep(0)
+    await state.queue.put(Envelope(
+        type=MessageType.TRANSFER_CHUNK,
+        payload={"transfer_id": "ov1", "seq": 0,
+                 "data": base64.b64encode(payload).decode()},
+    ))
+    await state.queue.put(Envelope(
+        type=MessageType.TRANSFER_END,
+        payload={"transfer_id": "ov1", "seq": 1, "sha256": digest},
+    ))
+    res = await handler
+    assert res["written"].endswith("README.md")
+    assert (sample_tree / "README.md").read_bytes() == payload
+    assert (sample_tree / "README.md").read_bytes() != old
+    assert not list(sample_tree.glob("README (*).md"))
+
+
 async def test_sys_info(rw_ctx):
     res = await HANDLERS['sys_info'](rw_ctx, {})
     assert 'platform' in res and 'libreoffice' in res

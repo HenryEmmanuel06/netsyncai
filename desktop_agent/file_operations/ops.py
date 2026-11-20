@@ -349,13 +349,17 @@ async def op_send_file(ctx: AgentContext, args: dict) -> dict:
         ctx.note_transfer(state, ok=False)
         raise OpDenied("sha256 mismatch — transfer corrupted")
 
-    # collision handling: don't silently overwrite
+    # collision handling: don't silently overwrite — unless the caller
+    # asked for a replace (upload `overwrite=1`), which keeps the old name
     final = dest
-    n = 1
-    while final.exists():
-        final = dest.with_name(f"{dest.stem} ({n}){dest.suffix}")
-        n += 1
-    os.replace(tmp, final)
+    if args.get("overwrite"):
+        os.replace(tmp, final)
+    else:
+        n = 1
+        while final.exists():
+            final = dest.with_name(f"{dest.stem} ({n}){dest.suffix}")
+            n += 1
+        os.replace(tmp, final)
     ctx.note_transfer(state, ok=True)
     return {"written": str(final), "size": final.stat().st_size, "sha256": h.hexdigest()}
 

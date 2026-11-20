@@ -393,6 +393,7 @@ async def upload(
     device_id: str,
     path: str,
     file: UploadFile,
+    overwrite: bool = False,
     auth: AuthContext = Depends(current_auth),
     store: DeviceStore = Depends(get_device_store),
 ):
@@ -408,7 +409,8 @@ async def upload(
     # 1. command first — the agent registers the pending write + dest path
     step_id = await dispatcher.send_command(
         device_id, "send_file",
-        {"path": path, "transfer_id": transfer_id, "name": filename},
+        {"path": path, "transfer_id": transfer_id, "name": filename,
+         "overwrite": overwrite},
     )
 
     # 2. then stream the payload
