@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeft, Check, ChevronRight, Copy, Download, FolderPlus, HardDrive,
-  Monitor, Plus, RefreshCcw, ShieldCheck, Trash2,
+  ArrowLeft, Bot, Calendar, Check, ChevronRight, Copy, Download, Folder,
+  FolderPlus, HardDrive, Laptop, Monitor, Plus, RefreshCcw, ShieldCheck, Trash2,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
 import {
-  ConfirmDialog, Dropdown, EmptyState, Modal, PageHeader, Spinner, StatusDot,
+  ConfirmDialog, Dropdown, EmptyState, Modal, PageHeader, Spinner,
 } from "@/components/ui";
 import { basename, formatBytes, formatDate, timeAgo } from "@/lib/format";
 import type { Device, LocalDirEntry, SharedFolderInfo } from "@/types";
@@ -407,45 +407,76 @@ export default function DevicesPage() {
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {devices.map((d) => (
-            <div key={d.id} className="card card-hover p-5">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--color-surface-2)]">
-                    <HardDrive size={18} className="text-[var(--color-accent)]" />
-                  </span>
-                  <div>
-                    <div className="font-semibold">{d.name}</div>
-                    <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-dim)]">
-                      <StatusDot status={d.status} />
-                      {d.status === "online" ? "Online" : `Last seen ${timeAgo(d.last_seen_at)}`}
+          {devices.map((d) => {
+            const on = d.status === "online";
+            return (
+              <div key={d.id}
+                className="card card-hover overflow-hidden border-[rgba(139,92,246,0.35)]"
+                style={{ background: "linear-gradient(135deg, rgba(139,92,246,0.20), rgba(59,130,246,0.06) 55%, transparent), var(--color-surface)" }}>
+                <div className="flex items-start gap-4 p-5 pb-4">
+                  <div className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-[rgba(139,92,246,0.4)] bg-[rgba(139,92,246,0.14)]">
+                    <Laptop size={30} className="text-[var(--color-accent)]" />
+                    <span className={`absolute right-2 top-2 h-2.5 w-2.5 rounded-full ${on ? "bg-[var(--color-online)]" : "bg-[var(--color-offline)]"}`} />
+                  </div>
+                  <div className="min-w-0 flex-1 pt-0.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-lg font-semibold">{d.name}</div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-text-dim)]">
+                          <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-[var(--color-online)]" : "bg-[var(--color-offline)]"}`} />
+                          {on ? "Connected now" : `Last seen ${timeAgo(d.last_seen_at)}`}
+                        </div>
+                      </div>
+                      <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${
+                        on
+                          ? "border-[rgba(34,197,94,0.45)] bg-[rgba(34,197,94,0.08)] text-[var(--color-online)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)]"
+                      }`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-[var(--color-online)]" : "bg-[var(--color-text-faint)]"}`} />
+                        {on ? "Online" : "Offline"}
+                      </span>
                     </div>
                   </div>
                 </div>
-                <span className={`badge ${d.status === "online" ? "badge-green" : "badge-gray"}`}>
-                  {d.status}
-                </span>
-              </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-[var(--color-text-dim)]">
-                <div>{d.platform} · Agent {d.agent_version ?? "—"}</div>
-                <div>Added {formatDate(d.created_at)}</div>
-              </div>
-              {d.status === "online" && <DriveStats deviceId={d.id} token={token!} />}
+                {/* platform / agent / added info bar */}
+                <div className="mx-5 flex items-center gap-3 rounded-xl border border-[var(--color-border)] bg-[rgba(0,0,0,0.18)] px-3.5 py-2.5 text-[11px] text-[var(--color-text-dim)]">
+                  <span className="flex items-center gap-1.5">
+                    <Monitor size={13} className="text-[var(--color-accent)]" />
+                    {d.platform || "—"}
+                  </span>
+                  <span className="h-3.5 w-px bg-[var(--color-border)]" />
+                  <span className="flex items-center gap-1.5">
+                    <Bot size={13} className="text-[var(--color-accent)]" />
+                    Agent {d.agent_version ?? "—"}
+                  </span>
+                  <span className="h-3.5 w-px bg-[var(--color-border)]" />
+                  <span className="flex items-center gap-1.5">
+                    <Calendar size={12} className="text-[var(--color-accent)]" />
+                    Added {formatDate(d.created_at)}
+                  </span>
+                </div>
 
-              <div className="mt-4 flex gap-2">
-                <button className="btn btn-ghost flex-1 justify-center"
-                  disabled={d.status !== "online"} onClick={() => setManage(d)}
-                  title={d.status !== "online" ? "Computer is offline" : ""}>
-                  <FolderPlus size={14} /> Folders
-                </button>
-                <button className="btn btn-danger !px-3" title="Remove device"
-                  onClick={() => setRevoking(d)}>
-                  <Trash2 size={14} />
-                </button>
+                {on && <div className="mx-5"><DriveStats deviceId={d.id} token={token!} /></div>}
+
+                <div className="mx-5 mb-5 mt-4 flex items-stretch gap-2">
+                  <button
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-[var(--color-border)] bg-[rgba(0,0,0,0.18)] px-3.5 py-2.5 text-sm transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:opacity-50"
+                    disabled={!on} onClick={() => setManage(d)}
+                    title={!on ? "Computer is offline" : "Shared folders"}>
+                    <Folder size={15} className="shrink-0 text-[var(--color-accent)]" />
+                    <span className="flex-1 text-left">Folders</span>
+                    <ChevronRight size={15} className="text-[var(--color-text-faint)]" />
+                  </button>
+                  <button title="Remove device" onClick={() => setRevoking(d)}
+                    className="flex w-12 items-center justify-center rounded-xl border border-[rgba(229,72,77,0.5)] text-[#ff9ea1] transition hover:brightness-125"
+                    style={{ background: "linear-gradient(135deg, rgba(229,72,77,0.85), rgba(160,26,30,0.9))" }}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
