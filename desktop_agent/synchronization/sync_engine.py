@@ -157,10 +157,32 @@ class SyncEngine:
 
     # ── outbound (local changes) ─────────────────────────────────────────
 
+    async def _root_gone(self, rt: SyncRuntime) -> None:
+        """The synced root itself was deleted or moved away — end the
+        session. The peer is told via a root-level rmdir marker and must
+        NOT propagate any of it: their copy survives untouched."""
+        try:
+            await self._send_event(rt, SyncEvent(
+                session_id=rt.session_id, op_id=str(uuid.uuid4()),
+                op=SyncOpType.RMDIR, rel_path=".",
+                from_device=self.device_id))
+        except Exception:
+            pass
+        log.info("sync %s ended — synced root removed", rt.session_id)
+        await self.stop(rt.session_id)
+
     async def _drain(self, rt: SyncRuntime) -> None:
         """Debounce watcher events and emit SyncEvents."""
         while True:
-            first = await rt.events.get()
+            try:
+                first = await asyncio.wait_for(rt.events.get(), timeout=30)
+            except asyncio.TimeoutError:
+                # watchdog can't always report the watched root's own
+                # deletion — poll it so a deleted/moved root ends the sync
+                if not rt.root.exists():
+                    await self._root_gone(rt)
+                    return
+                continue
             batch = [first]
             # coalesce bursts
             try:
@@ -178,6 +200,11 @@ class SyncEngine:
     async def _emit_batch(self, rt: SyncRuntime, batch: list) -> None:
         if rt.paused:
             return
+        # watcher may report the child deletions of a root delete without
+        # the root event itself — never propagate them, just end the sync
+        if not rt.root.exists():
+            await self._root_gone(rt)
+            return
         seen: dict[str, tuple] = {}  # rel_path -> (op, path, dest, priority)
 
         def put(rel: str, op: str, p: Path, old=None, pri: int = 2) -> None:
@@ -186,6 +213,13 @@ class SyncEngine:
                 seen[rel] = (op, p, old, pri)
 
         for ev_type, src, dest, is_dir in batch:
+            src_rel = self._rel(rt, Path(src))
+            if src_rel == "." and ev_type in ("deleted", "moved"):
+                await self._root_gone(rt)
+                return
+            if rt.file_root and ev_type == "deleted" and src_rel == rt.root.name:
+                await self._root_gone(rt)
+                return
             rel = self._rel(rt, Path(dest or src))
             if rel is None or self._ignored(rel) or self._suppressed(rt, rel):
                 continue
@@ -416,6 +450,12 @@ class SyncEngine:
         """Peer removed or renamed a folder — drop it only if EMPTY, so
         rename ghosts disappear without ever deleting real content."""
         rel = ev.rel_path
+        if rel in ("", "."):
+            # the peer deleted the synced root itself — end the session
+            # and leave our copy alone; a root delete must never propagate
+            log.info("peer removed the synced root — ending sync %s", rt.session_id)
+            await self.stop(rt.session_id)
+            return
         if self._ignored(rel):
             return
         target = (rt.root / rel).resolve()
