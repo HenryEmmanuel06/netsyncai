@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeftRight, Check, ChevronDown, ChevronRight, Clock, Eye, Info, Layers,
+  ArrowLeftRight, Check, ChevronDown, ChevronRight, Clock, Eye, Layers,
   Mail, Monitor, Pause, Play, Plus, RefreshCw, Square, Users, Zap,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -50,6 +50,7 @@ function SessionCard({ s, token, deviceName, ownIds, onAction, onStop }: {
   const [a, b] = s.participants;
   const title = basename(a?.root ?? "") || "Sync";
   const sideOnline = (id?: string) => live?.sides.find((x) => x.device_id === id)?.online;
+  const sideName = (id?: string) => live?.sides.find((x) => x.device_id === id)?.name;
 
   // real liveness: "active" only counts when every side is actually running
   // the session — a dead peer means the sync is broken, not syncing
@@ -111,7 +112,7 @@ function SessionCard({ s, token, deviceName, ownIds, onAction, onStop }: {
               <SideIcon size={13} className="shrink-0 text-[var(--color-text-faint)]" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)]">
-                  <span className="truncate">{p ? deviceName(p.device_id, p.device_name) : "—"}</span>
+                  <span className="truncate">{p ? deviceName(p.device_id, p.device_name || sideName(p.device_id)) : "—"}</span>
                   {live && (
                     <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${sideOnline(p?.device_id) ? "bg-[var(--color-online)]" : "bg-[var(--color-offline)]"}`} />
                   )}
@@ -126,15 +127,6 @@ function SessionCard({ s, token, deviceName, ownIds, onAction, onStop }: {
           <ArrowLeftRight size={14} />
         </span>
       </div>
-
-      {(deadSide || offSide) && (
-        <div className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-[rgba(251,191,36,0.25)] bg-[rgba(251,191,36,0.08)] px-3 py-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
-          <Info size={13} className="mt-px shrink-0 text-[var(--color-warn)]" />
-          {deadSide
-            ? "The other device no longer exists — stop this sync and start a new one between your current devices."
-            : `${offSide!.name || deviceName(offSide!.device_id)} is offline. The sync resumes automatically when it reconnects.`}
-        </div>
-      )}
 
       {/* live counters as stat tiles */}
       <div className="mx-4 mb-2 mt-3 grid grid-cols-3 gap-2">
