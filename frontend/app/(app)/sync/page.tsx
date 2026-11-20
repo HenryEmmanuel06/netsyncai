@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeftRight, Check, ChevronDown, Eye, Mail, Monitor, Pause, Play,
-  Plus, RefreshCw, Square, Users, Zap,
+  ArrowLeftRight, Check, ChevronDown, ChevronRight, Clock, Eye, Info, Layers,
+  Mail, Monitor, Pause, Play, Plus, RefreshCw, Square, Users, Zap,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/useAuth";
@@ -38,8 +38,10 @@ const STATE_META: Record<string, { label: string; cls: string }> = {
   stopped: { label: "Stopped", cls: "badge-gray" },
 };
 
-function SessionCard({ s, token, deviceName, onAction, onStop }: {
-  s: SyncSession; token: string; deviceName: (id: string, fallback?: string) => string;
+function SessionCard({ s, token, deviceName, ownIds, onAction, onStop }: {
+  s: SyncSession; token: string;
+  deviceName: (id: string, fallback?: string) => string;
+  ownIds: Set<string>;
   onAction: (s: SyncSession, act: "pause" | "resume") => void;
   onStop: (s: SyncSession) => void;
 }) {
@@ -61,81 +63,116 @@ function SessionCard({ s, token, deviceName, onAction, onStop }: {
         : meta
     : meta;
 
+  // card tint follows the live health: purple = syncing, amber = waiting,
+  // slate = paused/pending, grey = stopped
+  const tint = deadSide || offSide
+    ? "linear-gradient(135deg, rgba(245,158,11,0.32), rgba(180,83,9,0.10) 60%, transparent)"
+    : s.state === "active"
+      ? "linear-gradient(135deg, rgba(139,92,246,0.40), rgba(59,130,246,0.14) 55%, transparent)"
+      : s.state === "pending"
+        ? "linear-gradient(135deg, rgba(59,130,246,0.22), transparent 70%)"
+        : "linear-gradient(135deg, rgba(148,163,184,0.16), transparent 70%)";
+  const connCls = deadSide || offSide
+    ? "border-[rgba(245,158,11,0.55)] bg-[rgba(245,158,11,0.14)] text-[var(--color-warn)]"
+    : s.state === "active"
+      ? "border-[rgba(139,92,246,0.55)] bg-[rgba(139,92,246,0.14)] text-[var(--color-accent)]"
+      : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-faint)]";
+
   return (
     <div className="card card-hover flex flex-col overflow-hidden">
-      <div className="flex items-start gap-3 p-4">
-        <FolderArt size={46} tone={s.state === "active" ? "orange" : s.state === "pending" ? "blue" : "purple"} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{title}</div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <span className={`badge ${badge.cls}`}>
-              {s.state === "active" && !deadSide && !offSide && <RefreshCw size={10} className="spin-slow" />}
-              {badge.label}
-            </span>
-            <span className="pill">{s.mode === "review" ? "Review mode" : "Live"}</span>
+      {/* gradient header — folder tile + title + status pills */}
+      <div className="relative" style={{ background: tint }}>
+        <div className="flex items-start gap-3 p-4">
+          <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(0,0,0,0.25)]">
+            <FolderArt size={40} tone={deadSide || offSide ? "orange" : s.state === "active" ? "orange" : s.state === "pending" ? "blue" : "purple"} />
+            <span className={`absolute right-1.5 top-1.5 h-2 w-2 rounded-full ${deadSide || offSide ? "bg-[var(--color-warn)]" : s.state === "active" ? "bg-[var(--color-online)]" : "bg-[var(--color-text-faint)]"}`} />
+          </div>
+          <div className="min-w-0 flex-1 pt-0.5">
+            <div className="truncate text-sm font-semibold">{title}</div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className={`badge ${badge.cls}`}>
+                {s.state === "active" && !deadSide && !offSide
+                  ? <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-online)]" />
+                  : <Clock size={10} />}
+                {badge.label}
+              </span>
+              <span className="pill">{s.mode === "review" ? "Review mode" : "Live"}</span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* the two endpoints joined by a connector */}
-      <div className="mx-4 mb-4 flex items-center gap-2">
-        {[a, b].map((p, i) => (
-          <div key={p?.device_id ?? i} className={`well min-w-0 flex-1 px-3 py-2.5 ${i === 1 ? "order-3" : ""}`}>
-            <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)]">
-              <Monitor size={11} />
-              <span className="truncate">{p ? deviceName(p.device_id, p.device_name) : "—"}</span>
-              {live && (
-                <span className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${sideOnline(p?.device_id) ? "bg-[var(--color-online)]" : "bg-[var(--color-offline)]"}`} />
-              )}
+      <div className="mx-4 mt-3 flex items-center gap-2">
+        {[a, b].map((p, i) => {
+          const SideIcon = p && ownIds.has(p.device_id) ? Monitor : Users;
+          return (
+            <div key={p?.device_id ?? i} className={`well flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 ${i === 1 ? "order-3" : ""}`}>
+              <SideIcon size={13} className="shrink-0 text-[var(--color-text-faint)]" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)]">
+                  <span className="truncate">{p ? deviceName(p.device_id, p.device_name) : "—"}</span>
+                  {live && (
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${sideOnline(p?.device_id) ? "bg-[var(--color-online)]" : "bg-[var(--color-offline)]"}`} />
+                  )}
+                </div>
+                <div className="mt-0.5 truncate text-[13px] font-medium">{p ? basename(p.root) || p.root : "—"}</div>
+              </div>
+              <ChevronRight size={12} className="shrink-0 text-[var(--color-text-faint)]" />
             </div>
-            <div className="mt-0.5 truncate text-[13px] font-medium">{p ? basename(p.root) || p.root : "—"}</div>
-          </div>
-        ))}
-        <span className={`order-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
-          s.state === "active"
-            ? "border-[rgba(139,92,246,0.5)] bg-[rgba(139,92,246,0.12)] text-[var(--color-accent)]"
-            : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-faint)]"
-        }`}>
-          <ArrowLeftRight size={13} />
+          );
+        })}
+        <span className={`order-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border ${connCls}`}>
+          <ArrowLeftRight size={14} />
         </span>
       </div>
 
       {(deadSide || offSide) && (
-        <div className="mx-4 mb-4 rounded-md border border-[rgba(251,191,36,0.25)] bg-[rgba(251,191,36,0.08)] px-3 py-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+        <div className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-[rgba(251,191,36,0.25)] bg-[rgba(251,191,36,0.08)] px-3 py-2 text-[11px] leading-snug text-[var(--color-text-dim)]">
+          <Info size={13} className="mt-px shrink-0 text-[var(--color-warn)]" />
           {deadSide
             ? "The other device no longer exists — stop this sync and start a new one between your current devices."
             : `${offSide!.name || deviceName(offSide!.device_id)} is offline. The sync resumes automatically when it reconnects.`}
         </div>
       )}
 
-      <div className="mt-auto grid grid-cols-3 border-t border-[var(--color-border)] bg-[rgba(0,0,0,0.15)] text-[11px]">
+      {/* live counters as stat tiles */}
+      <div className="mx-4 mb-2 mt-3 grid grid-cols-3 gap-2">
         {[
-          { k: "Applied", v: live ? live.applied_ops : "—" },
-          { k: "Pending", v: live ? live.pending_ops : "—" },
-          { k: "Sides live", v: live ? `${live.sides.filter((x) => x.online).length}/${live.sides.length}` : "—" },
-        ].map((m, i) => (
-          <div key={m.k} className={`px-3 py-2.5 ${i > 0 ? "border-l border-[var(--color-border)]" : ""}`}>
-            <div className="text-[var(--color-text-faint)]">{m.k}</div>
-            <div className="mt-0.5 text-sm font-semibold">{m.v}</div>
+          { k: "Applied", v: live ? live.applied_ops : "—",
+            icon: <Zap size={13} className="text-[var(--color-accent)]" /> },
+          { k: "Pending", v: live ? live.pending_ops : "—",
+            icon: <Clock size={13} className="text-[var(--color-info,#60a5fa)]" /> },
+          { k: "Sides live", v: live ? `${live.sides.filter((x) => x.online).length}/${live.sides.length}` : "—",
+            icon: <Layers size={13} className="text-[var(--color-online)]" /> },
+        ].map((m) => (
+          <div key={m.k} className="well flex flex-col gap-1 px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-faint)]">
+              {m.icon}{m.k}
+            </div>
+            <div className="text-base font-semibold">{m.v}</div>
           </div>
         ))}
       </div>
 
       {s.state !== "stopped" && (
-        <div className="flex gap-2 border-t border-[var(--color-border)] px-3 py-2.5">
+        <div className="mt-auto flex gap-2 px-4 pb-4">
           {s.state === "active" && (
-            <button className="btn btn-ghost flex-1 !py-1.5 !text-xs" onClick={() => onAction(s, "pause")}>
-              <Pause size={12} /> Pause
+            <button className="btn flex-1 !rounded-xl !border-[var(--color-border)] !bg-[var(--color-surface-2)] !py-2 !text-xs hover:!bg-[var(--color-surface-3)]"
+              onClick={() => onAction(s, "pause")}>
+              <Pause size={13} /> Pause
             </button>
           )}
           {s.state === "paused" && (
-            <button className="btn btn-primary flex-1 !py-1.5 !text-xs" onClick={() => onAction(s, "resume")}>
-              <Play size={12} /> Resume
+            <button className="btn btn-primary flex-1 !rounded-xl !py-2 !text-xs" onClick={() => onAction(s, "resume")}>
+              <Play size={13} /> Resume
             </button>
           )}
-          <button className={`btn btn-danger !py-1.5 !text-xs ${s.state === "active" || s.state === "paused" ? "" : "flex-1"}`}
+          <button
+            className={`btn !rounded-xl !border-0 !py-2 !text-xs !text-white ${s.state === "active" || s.state === "paused" ? "" : "flex-1"}`}
+            style={{ background: "linear-gradient(135deg, #e5484d, #c62a2e)" }}
             onClick={() => onStop(s)}>
-            <Square size={11} /> {s.state === "pending" ? "Cancel request" : "Stop"}
+            <Square size={11} fill="currentColor" /> {s.state === "pending" ? "Cancel request" : "Stop"}
           </button>
         </div>
       )}
@@ -480,6 +517,7 @@ export default function SyncPage() {
     return (id: string, fallback?: string) =>
       m.get(id) ?? (fallback || "Colleague's computer");
   }, [devices]);
+  const ownIds = useMemo(() => new Set(devices.map((d) => d.id)), [devices]);
 
   const filteredShares = useMemo(() => {
     const q = colleagueEmail.trim().toLowerCase();
@@ -549,7 +587,7 @@ export default function SyncPage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {sessions.filter((s) => inTab(s, tab)).map((s) => (
             <SessionCard key={s.id} s={s} token={token!} deviceName={deviceName}
-              onAction={action} onStop={setStopTarget} />
+              ownIds={ownIds} onAction={action} onStop={setStopTarget} />
           ))}
         </div>
       )}
