@@ -39,7 +39,7 @@ const STATE_META: Record<string, { label: string; cls: string }> = {
 };
 
 function SessionCard({ s, token, deviceName, onAction, onStop }: {
-  s: SyncSession; token: string; deviceName: (id: string) => string;
+  s: SyncSession; token: string; deviceName: (id: string, fallback?: string) => string;
   onAction: (s: SyncSession, act: "pause" | "resume") => void;
   onStop: (s: SyncSession) => void;
 }) {
@@ -83,7 +83,7 @@ function SessionCard({ s, token, deviceName, onAction, onStop }: {
           <div key={p?.device_id ?? i} className={`well min-w-0 flex-1 px-3 py-2.5 ${i === 1 ? "order-3" : ""}`}>
             <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-faint)]">
               <Monitor size={11} />
-              <span className="truncate">{p ? deviceName(p.device_id) : "—"}</span>
+              <span className="truncate">{p ? deviceName(p.device_id, p.device_name) : "—"}</span>
               {live && (
                 <span className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${sideOnline(p?.device_id) ? "bg-[var(--color-online)]" : "bg-[var(--color-offline)]"}`} />
               )}
@@ -477,7 +477,8 @@ export default function SyncPage() {
 
   const deviceName = useMemo(() => {
     const m = new Map(devices.map((d) => [d.id, d.name]));
-    return (id: string) => m.get(id) ?? "Colleague's computer";
+    return (id: string, fallback?: string) =>
+      m.get(id) ?? (fallback || "Colleague's computer");
   }, [devices]);
 
   const filteredShares = useMemo(() => {

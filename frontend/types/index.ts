@@ -28,6 +28,7 @@ export interface RemoteFileEntry {
 export interface SyncParticipant {
   device_id: string;
   root: string;
+  device_name?: string;
 }
 
 export interface SyncSession {

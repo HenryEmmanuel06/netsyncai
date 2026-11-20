@@ -33,6 +33,7 @@ class SyncAcceptRequest(BaseModel):
 class SyncParticipant(BaseModel):
     device_id: str
     root: str
+    device_name: str = ""
 
 
 class SyncSessionResponse(BaseModel):

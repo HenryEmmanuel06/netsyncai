@@ -467,7 +467,8 @@ class SupabaseDeviceStore:
         return {
             **{k: v for k, v in s.items() if k != "sync_participants"},
             "participants": [
-                {"device_id": p["device_id"], "root": p.get("root_path", "")}
+                {"device_id": p["device_id"], "root": p.get("root_path", ""),
+                 "device_name": (p.get("devices") or {}).get("name", "")}
                 for p in participants
             ],
         }
@@ -475,7 +476,7 @@ class SupabaseDeviceStore:
     async def get_sync(self, session_id: str) -> dict:
         r = await self._client.get(
             "/sync_sessions",
-            params={"id": f"eq.{session_id}", "select": "*,sync_participants(*)"},
+            params={"id": f"eq.{session_id}", "select": "*,sync_participants(*,devices(name))"},
         )
         r.raise_for_status()
         rows = r.json()
@@ -487,7 +488,7 @@ class SupabaseDeviceStore:
         # sessions I created + sessions involving a device I own
         r = await self._client.get(
             "/sync_sessions",
-            params={"created_by": f"eq.{owner_id}", "select": "*,sync_participants(*)"},
+            params={"created_by": f"eq.{owner_id}", "select": "*,sync_participants(*,devices(name))"},
         )
         r.raise_for_status()
         sessions = {s["id"]: self._sync_row(s, s.get("sync_participants", []))
@@ -498,7 +499,7 @@ class SupabaseDeviceStore:
         r = await self._client.get(
             "/sync_participants",
             params={"device_id": f"in.({my_ids})",
-                    "select": "device_id,root_path,sync_sessions(*,sync_participants(*))"},
+                    "select": "device_id,root_path,sync_sessions(*,sync_participants(*,devices(name)))"},
         )
         r.raise_for_status()
         for row in r.json():
@@ -512,7 +513,7 @@ class SupabaseDeviceStore:
         r = await self._client.get(
             "/sync_sessions",
             params={"pending_user_id": f"eq.{owner_id}",
-                    "select": "*,sync_participants(*)"},
+                    "select": "*,sync_participants(*,devices(name))"},
         )
         r.raise_for_status()
         for s in r.json():

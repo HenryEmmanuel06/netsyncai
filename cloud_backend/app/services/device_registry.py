@@ -436,18 +436,24 @@ class InMemoryDeviceStore:
         self._sync[session_id] = session
         return {k: v for k, v in session.items()}
 
+    def _name_participants(self, s: dict) -> dict:
+        for p in s["participants"]:
+            p["device_name"] = self._devices.get(p["device_id"], {}).get("name", "")
+        return s
+
     async def get_sync(self, session_id: str) -> dict:
         s = getattr(self, "_sync", {}).get(session_id)
         if not s:
             raise DeviceNotFound(session_id)
-        return s
+        return self._name_participants(s)
 
     async def list_sync(self, owner_id: str) -> list[dict]:
         # sessions I created, that involve one of my devices, or that were
         # addressed to me and are waiting for my acceptance
         mine = {d["id"] for d in self._devices.values() if d["owner_id"] == owner_id}
         return [
-            s for s in getattr(self, "_sync", {}).values()
+            self._name_participants(s)
+            for s in getattr(self, "_sync", {}).values()
             if s["created_by"] == owner_id
             or s.get("pending_user_id") == owner_id
             or any(p["device_id"] in mine for p in s["participants"])
